@@ -5,8 +5,8 @@
 // @version      6.3.1
 // @description  Flexible header-based Excel review and safe form population for BTS Property
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
-// @downloadURL  https://raw.githubusercontent.com/Shenavar-Dev/Load-Excel-To-Web/main/bts_property_assistant.user.js
-// @updateURL    https://raw.githubusercontent.com/Shenavar-Dev/Load-Excel-To-Web/main/bts_property_assistant.user.js
+// @downloadURL  https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
+// @updateURL    https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
