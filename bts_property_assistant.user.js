@@ -4,10 +4,11 @@
 // @version      6.3.0
 // @description  Flexible header-based Excel review and safe form population for BTS Property
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
+// @downloadURL  https://raw.githubusercontent.com/Shenavar-Dev/Load-Excel-To-Web/main/bts_property_assistant.user.js
+// @updateURL    https://raw.githubusercontent.com/Shenavar-Dev/Load-Excel-To-Web/main/bts_property_assistant.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
-
 /*
  * Version 6.3.0 (هدر منعطف حداقل ۳ ستون، عدم توقف روی ردیف کوتاه و اصلاحات چیدمان)
  * v6.3.0 changes:
