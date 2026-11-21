@@ -4,8 +4,8 @@
 // @version      6.2.2
 // @description  Header-based Excel review and safe form population for BTS Property
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
-// @downloadURL https://raw.githubusercontent.com/USERNAME/Irancell-BTS-Property-Tools/main/Irancell-BTS-Property.user.js
-// @updateURL   https://raw.githubusercontent.com/USERNAME/Irancell-BTS-Property-Tools/main/Irancell-BTS-Property.user.js
+// @updateURL    https://raw.githubusercontent.com/Shenavar-Dev/Load-Excel-To-Web/main/bts_property_assistant.user.js
+// @downloadURL  https://raw.githubusercontent.com/Shenavar-Dev/Load-Excel-To-Web/main/bts_property_assistant.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
