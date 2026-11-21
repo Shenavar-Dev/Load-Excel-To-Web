@@ -2,7 +2,7 @@
 // @name         BTS Property Excel Assistant
 // @namespace    https://btsproperty.mtnirancell.ir/
 // @author       Ebrahim Shenavar | Irancell
-// @version      6.3.2
+// @version      6.3.3
 // @description  Flexible header-based Excel review and safe form population for BTS Property
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
 // @downloadURL  https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
@@ -12,15 +12,20 @@
 // ==/UserScript==
 
 /*
- * Version 6.3.2 (اصلاح لغو انتظار LL Name و حذف گزارش ستون‌های ناشناخته)
- * v6.3.2 changes:
- * - Fixed cancelActiveWait prematurely clearing state.cancelRequested so waitForLLName respects cancellation.
- * - Removed unknownHeaders notice from checkHeaderDraft status message.
- * - Unified modal close behavior (requestClose(true)), guarded closeModal against double execution, and reset cancelRequested cleanly.
- * - Disabled Apply button when 0 fields are marked will-change; updated Calculate wait button label to "توقف پیگیری".
- * - Added Site ID missing-data guard before auto-search, unknown header detection in settings, and data-reason attribute on unmapped/no-data cells.
- * - Settings layout: centered Site ID row above a 5x7 grid with larger text, larger guide text, top-left auto-width "بازگشت به پیش‌فرض" button, and centered footer buttons.
- * - Main modal: taller viewport-safe height, centered main status message, left-aligned input boxes stretching to end of div, and soft-red cancel buttons.
+ * Version 6.3.3 (بر پایه 6.3.2 — قانون Calculate، اعمال دو مرحله‌ای Escalation، یکدست‌سازی متن‌ها و رنگ‌ها)
+ * v6.3.3 changes:
+ * - Calculate: when the row has no usable amount (no header / no data / empty cell) the live form amount is used;
+ *   if neither is valid, the result toast says "Calculate not run" instead of staying silent.
+ * - Apply: Escalation Type is seated first (it triggers a postback) so Escalation % can open before it is
+ *   evaluated and applied. Cancel / timeout / error stops Apply with a clear message.
+ * - Apply is disabled while the paste box differs from the reviewed text (prevents applying stale data).
+ * - Header grid colours now match the main modal: yellow = no header (not checked), orange = duplicate,
+ *   red = required header missing (Site ID / Contract Type only).
+ * - Footer chip renamed "غیرقابل بررسی" with a tooltip covering all its causes (no header, no data, not editable).
+ * - Persian wording pass: correct half-spaces ("نمی‌شود"), no space before punctuation, no dash-joined clauses,
+ *   messages aligned with the event they describe; short English comments above every function.
+ * - Cleanup: removed dead code (unknownHeaders, cellCount, unreachable empty-select branch).
+ * - Unchanged: header rules (min 3, Site ID + Contract Type), search flow, Contract change flow, cancel handling.
  */
 
 (function () {
@@ -80,13 +85,18 @@
     const CALC_FIELD_KEYS = ['taxType', 'contractAmount', 'escalationType', 'escalation', 'llCount'];
     const HEADER_STORAGE_KEY = 'epf:bts-excel-paste:header-row:v1';
 
+    // Normalises a header cell for case- and space-insensitive matching.
     function normalizeHeader(value) {
         return String(value == null ? '' : value).replace(/^\uFEFF/, '').trim().replace(/\s+/g, ' ').toLowerCase();
     }
 
+    // Converts Latin digits to Persian digits for display.
     function faNum(value) {
         return String(value).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[digit]);
     }
+
+    // Headers that must exist for a header row to be accepted (others are optional)
+    const REQUIRED_HEADER_KEYS = [FIELD_KEYS.SITE_ID, FIELD_KEYS.CONTRACT_TYPE];
 
     // v6.3.0: Flexible header mapping (requires Site ID, Contract Type, and >= 3 mapped columns total)
     /** Maps available fields to their Excel columns and validates minimum required headers. */
@@ -96,16 +106,8 @@
             return { parsed: false, ready: false, missing: 0, mappedCount: 0 };
         }
 
-        const rawCells = parsedRows[0];
-        const normalized = rawCells.map(normalizeHeader);
-        const knownSet = new Set(WEB_FIELDS.map(f => normalizeHeader(f.label)));
-        const unknownHeaders = [];
-        rawCells.forEach((rawCell, idx) => {
-            const norm = normalized[idx];
-            if (norm && !knownSet.has(norm)) {
-                unknownHeaders.push(String(rawCell).trim());
-            }
-        });
+        // Normalised header cells of the single registered row
+        const normalized = parsedRows[0].map(normalizeHeader);
 
         const columns = Object.create(null);
         const states = Object.create(null);
@@ -143,8 +145,7 @@
             hasContractType,
             columns,
             states,
-            dupCount,
-            unknownHeaders
+            dupCount
         };
     }
 
@@ -156,7 +157,7 @@
             columns[field.key] = index;
             states[field.key] = { st: 'ok', col: index };
         });
-        return { parsed: true, ready: true, missing: 0, columns, states, cellCount: WEB_FIELDS.length, dupCount: 0 };
+        return { parsed: true, ready: true, missing: 0, mappedCount: WEB_FIELDS.length, columns, states, dupCount: 0 };
     }
 
     /** True when every field sits on its default column (the 1..N order). */
@@ -164,6 +165,7 @@
         return Boolean(mapping) && WEB_FIELDS.every((field, index) => mapping.columns[field.key] === index);
     }
 
+    // Reads the saved header row from localStorage (empty when storage is unavailable).
     function loadStoredHeader() {
         try {
             const value = window.localStorage.getItem(HEADER_STORAGE_KEY);
@@ -174,6 +176,7 @@
         }
     }
 
+    // Saves the header row to localStorage; returns false when storage is blocked.
     function persistHeader(headerText) {
         try {
             window.localStorage.setItem(HEADER_STORAGE_KEY, headerText);
@@ -204,6 +207,7 @@
         return { ok: true, webValues, outOfRange };
     }
 
+    // Parses Excel TSV text into rows, honouring quoted multi-line cells.
     function parseTSV(text) {
         const source = String(text || '').replace(/\r\n?/g, '\n').replace(/[\u2028\u2029]/g, '\n');
         const rows = [];
@@ -287,6 +291,7 @@
         cancelRequested: false
     };
 
+    // Returns the reviewed value of a field key ('' when absent).
     function getVal(key) {
         const value = state.webValues[key];
         return value === undefined ? '' : value;
@@ -310,10 +315,12 @@
         return s.replace(/\u064A/g, '\u06CC').replace(/\u0643/g, '\u06A9');
     }
 
+    // Light normalisation (letters unified, trimmed, lower-cased) for comparisons.
     function normalize(value) {
         return fixChars(String(value == null ? '' : value)).trim().toLowerCase();
     }
 
+    // Strict normalisation (no spaces or ZWNJ) used as a second matching pass.
     function normalizeStrong(value) {
         return fixChars(String(value == null ? '' : value))
             .replace(/\u200c/g, '')
@@ -322,6 +329,7 @@
             .toLowerCase();
     }
 
+    // Whitespace-insensitive form of a text for equality checks.
     function looseText(value) {
         return fixChars(String(value == null ? '' : value))
             .replace(/[\u200e\u200f]/g, '')
@@ -330,10 +338,12 @@
             .toLowerCase();
     }
 
+    // Removes thousands separators from an amount.
     function stripCommas(value) {
         return String(value == null ? '' : value).replace(/,/g, '').trim();
     }
 
+    // Creates an element with an optional class and text.
     function makeElement(tagName, className, text) {
         const el = document.createElement(tagName);
         if (className) el.className = className;
@@ -341,12 +351,14 @@
         return el;
     }
 
+    // True when a form control cannot be edited.
     function isElementDisabled(el) {
         if (!el) return true;
         return Boolean(el.disabled || el.readOnly ||
             (typeof el.matches === 'function' && el.matches(':disabled')));
     }
 
+    // Returns the ASP.NET PageRequestManager when the page provides it.
     function getPRM() {
         try {
             const w = window.Sys && window.Sys.WebForms;
@@ -356,6 +368,7 @@
         }
     }
 
+    // Looks up a web field's element and reports whether it is usable.
     function targetInfo(field) {
         const el = field.id ? document.getElementById(field.id) : null;
         if (!el) return { element: null, exists: false, typeMatches: false, editable: false };
@@ -370,6 +383,7 @@
         return { element: el, exists: true, typeMatches: true, editable: !isElementDisabled(el) };
     }
 
+    // Finds an enabled option by value or text (loose match).
     function findSelectableOption(selectEl, value) {
         if (!selectEl || selectEl.tagName.toLowerCase() !== 'select') return null;
         const wanted = normalize(value);
@@ -393,6 +407,7 @@
         return match || null;
     }
 
+    // Finds an enabled option by its visible text only.
     function findOptionByText(selectEl, value) {
         if (!selectEl || selectEl.tagName.toLowerCase() !== 'select') return null;
         const options = Array.from(selectEl.options || []).filter(o => !o.disabled);
@@ -403,6 +418,7 @@
         return options.find(o => normalizeStrong(o.textContent) === ws) || null;
     }
 
+    // Visible text of the selected option.
     function selectedOptionText(selectEl) {
         if (!selectEl || selectEl.tagName.toLowerCase() !== 'select') return '';
         const selected = selectEl.selectedOptions && selectEl.selectedOptions.length
@@ -411,6 +427,7 @@
         return selected ? String(selected.textContent || '').trim() : '';
     }
 
+    // Value currently shown on the live form for a field.
     function getCurrentFormValue(field) {
         const info = targetInfo(field);
         if (!info.exists || !info.typeMatches) return '';
@@ -420,13 +437,20 @@
         return String(info.element.value || '').trim();
     }
 
-    function amountIsValid() {
-        const raw = stripCommas(getVal(FIELD_KEYS.AMOUNT));
-        if (!raw) return false;
-        const n = Number(raw);
-        return !isNaN(n) && n > 0;
+    // v6.3.3: Calculate needs a usable amount: the row amount if present, otherwise the live form amount
+    function resolveCalcAmount() {
+        const rowAmount = stripCommas(getVal(FIELD_KEYS.AMOUNT));
+        if (rowAmount) {
+            const n = Number(rowAmount);
+            return { source: 'row', valid: !isNaN(n) && n > 0 };
+        }
+        const info = targetInfo(FIELD_BY_KEY[FIELD_KEYS.AMOUNT]);
+        const formAmount = info.exists ? stripCommas(info.element.value) : '';
+        const n = Number(formAmount);
+        return { source: 'form', valid: formAmount !== '' && !isNaN(n) && n > 0 };
     }
 
+    // True when the live form already holds the given value.
     function fieldSat(field, pastedValue) {
         const info = targetInfo(field);
         if (!info.exists || !info.typeMatches) return false;
@@ -711,7 +735,8 @@
         .epf-hlegend { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 18px; margin: 9px 0 0; font-size: 11.5px; line-height: 1.65; color: var(--mut); }
         .epf-hlegend span { font-weight: 700; }
         .epf-hlegend .lg-miss { color: var(--bad); }
-        .epf-hlegend .lg-dup { color: #b8860b; }
+        .epf-hlegend .lg-dup { color: #c2570c; }
+        .epf-hlegend .lg-abs { color: #9a7b0a; }
         .epf-hlegend .lg-chg { color: var(--ok); }
         .epf-hlegend .lg-def { color: #8a959b; }
         .epf-hgrid-wrap { margin-top: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfc; }
@@ -723,7 +748,8 @@
         .epf-hname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 600; }
         .epf-hcol { flex: 0 0 auto; min-width: 18px; text-align: center; font-weight: 800; font-size: 12.5px; color: #98a3a8; }
         .epf-hname.epf-h-missing, .epf-hcol.epf-h-missing { color: var(--bad); }
-        .epf-hname.epf-h-dup, .epf-hcol.epf-h-dup { color: #b8860b; }
+        .epf-hname.epf-h-dup, .epf-hcol.epf-h-dup { color: #c2570c; }
+        .epf-hname.epf-h-absent, .epf-hcol.epf-h-absent { color: #9a7b0a; }
         .epf-hcol.epf-h-changed { color: var(--ok); }
         .epf-box { display: none; margin-top: 8px; padding: 7px 9px; border-radius: 7px; font-size: 11px; line-height: 1.75; white-space: pre-wrap; }
         .epf-box.epf-show { display: block; }
@@ -795,7 +821,7 @@
     const gearBtn = makeElement('button', 'epf-gear');
     gearBtn.type = 'button';
     gearBtn.setAttribute('aria-label', 'تنظیمات نگاشت هدر');
-    const gearState = makeElement('span', 'epf-gear-state', 'پیشفرض');
+    const gearState = makeElement('span', 'epf-gear-state', 'پیش‌فرض');
     gearBtn.append(makeElement('span', 'epf-gear-main', '⚙ تنظیمات نگاشت هدر'), gearState);
 
     const headerIdentity = makeElement('span', 'epf-identity', '— —');
@@ -819,7 +845,7 @@
 
     const headerMain = makeElement('div');
     const subtitle = makeElement('p', 'epf-subtitle',
-        'یک ردیف از اکسل را در کادر زیر پیست کنید. پس از بررسی، فیلدهای موردنظر را اعمال کنید. در صورت تغییر فیلدهای مؤثر در محاسبات، Calculate به‌صورت خودکار اجرا می‌شود.');
+        'ردیف داده را از اکسل در کادر زیر پیست کنید و «بررسی» را بزنید. فیلدهای بدون هدر یا بدون داده بررسی نمی‌شوند و خانهٔ خالی اعمال نمی‌شود. اگر فیلدی مؤثر در محاسبه تغییر کند، Calculate خودکار اجرا می‌شود.');
     const mapNote = makeElement('div');
     mapNote.id = 'epf-map-note';
     mapNote.setAttribute('role', 'status');
@@ -859,16 +885,17 @@
 
     const footer = makeElement('div', 'epf-footer');
     const chipsBox = makeElement('div', 'epf-chips');
-    // v6.3.0: Merged yellow status chip label
+    // v6.3.3: Chip labels match their real meaning; the tooltip lists every cause of the yellow chip
     const CHIP_DEFS = [
-        { key: 'will-change', label: 'تغییر' },
-        { key: 'same', label: 'یکسان' },
-        { key: 'invalid-select', label: 'نامعتبر' },
-        { key: 'not-editable', label: 'عدم ویرایش - فاقد هدر یا داده - بررسی نمیشود' }
+        { key: 'will-change', label: 'تغییر', hint: 'فیلدهایی که مقدارشان روی فرم تغییر می‌کند' },
+        { key: 'same', label: 'یکسان', hint: 'مقدار ردیف با فرم برابر است یا خانهٔ ردیف خالی است' },
+        { key: 'invalid-select', label: 'نامعتبر', hint: 'مقدار ردیف در گزینه‌های لیست سایت نیست و اعمال نمی‌شود' },
+        { key: 'not-editable', label: 'غیرقابل بررسی', hint: 'بدون هدر، بدون داده در ردیف یا غیرقابل ویرایش در فرم؛ بررسی نمی‌شود' }
     ];
     const chips = CHIP_DEFS.map(def => {
         const el = makeElement('span', 'epf-chip');
         el.dataset.k = def.key;
+        el.title = def.hint;
         el.append(makeElement('span', '', def.label), makeElement('strong', 'epf-chip-count', '0'));
         chipsBox.appendChild(el);
         return { key: def.key, label: def.label, el, count: el.querySelector('.epf-chip-count') };
@@ -925,6 +952,7 @@
         return Boolean(activeHeaderMapping && Number.isInteger(activeHeaderMapping.columns[key]));
     }
 
+    // True when Cancellation Letter is Yes (row or form), so the date box is usable.
     function isCancellationDateEnabled() {
         if (String(getVal('cancellationLetter')).trim().toUpperCase() === 'YES') return true;
         const info = targetInfo(FIELD_BY_KEY.cancellationLetter);
@@ -976,7 +1004,7 @@
                     label.htmlFor = control.id;
 
                     const meta = makeElement('div', 'epf-meta');
-                    const status = makeElement('span', 'epf-field-status', 'پس از بررسی نمایش داده می‌شود');
+                    const status = makeElement('span', 'epf-field-status', 'پس از بررسی ردیف نمایش داده می‌شود');
                     const current = makeElement('span', 'epf-field-cur');
                     current.hidden = true;
                     const currentValue = makeElement('bdi');
@@ -1005,6 +1033,7 @@
         WEB_FIELDS.forEach(field => syncControl(field.key));
     }
 
+    // Mirrors a reviewed value into its modal control.
     function syncControl(key) {
         const control = controls[key];
         if (!control) return;
@@ -1052,6 +1081,7 @@
         control.disabled = false;
     }
 
+    // Refreshes every dropdown control from the live page options.
     function syncAllSelects() {
         WEB_FIELDS.forEach(field => {
             if (field.type === 'select') syncControl(field.key);
@@ -1070,6 +1100,7 @@
         mainMessage.className = 'epf-show ' + className;
     }
 
+    // Hides the main status message.
     function clearMainMessage() {
         mainMessage.textContent = '';
         mainMessage.className = '';
@@ -1098,6 +1129,7 @@
         }
     }
 
+    // Updates the footer status counters.
     function updateChips(counts) {
         chips.forEach(chip => {
             chip.count.textContent = state.parsed && counts ? String(counts[chip.key] || 0) : '0';
@@ -1123,17 +1155,17 @@
     function evaluateField(key) {
         const field = FIELD_BY_KEY[key];
         if (!isMapped(key)) {
-            setRowStatus(key, 'not-editable', 'هدر ندارد - بررسی نمیشود', null, 'no-header');
+            setRowStatus(key, 'not-editable', 'هدر ندارد؛ بررسی نمی‌شود', null, 'no-header');
             return 'not-editable';
         }
         if (state.outOfRange && state.outOfRange[key]) {
-            setRowStatus(key, 'not-editable', 'داده ندارد - بررسی نمیشود', null, 'no-data');
+            setRowStatus(key, 'not-editable', 'داده ندارد؛ بررسی نمی‌شود', null, 'no-data');
             return 'not-editable';
         }
 
         const pasted = getVal(key);
         if (String(pasted) === '') {
-            setRowStatus(key, 'same', 'داده خالی است ، اعمال نمیشود');
+            setRowStatus(key, 'same', 'داده خالی است؛ اعمال نمی‌شود');
             return 'same';
         }
 
@@ -1141,16 +1173,22 @@
 
         if (key === 'cancellationDate') {
             if (!isCancellationDateEnabled()) {
-                setRowStatus(key, 'not-editable', 'فقط در صورت Yes بودن Cancellation Letter قابل اعمال است');
+                setRowStatus(key, 'not-editable', 'فقط وقتی Cancellation Letter برابر Yes باشد قابل اعمال است');
                 return 'not-editable';
             }
         } else {
             if (!info.exists || !info.typeMatches) {
-                setRowStatus(key, 'not-editable', 'فیلد در فرم پیدا نشد یا نوع آن سازگار نیست');
+                setRowStatus(key, 'not-editable', 'فیلد در فرم پیدا نشد یا نوع آن سازگار نیست؛ بررسی نمی‌شود');
                 return 'not-editable';
             }
             if (!info.editable) {
-                setRowStatus(key, 'not-editable', 'این فیلد در فرم قابل ویرایش نیست');
+                // v6.3.3: Escalation % opens only after Escalation Type is applied, so say so instead of "not editable"
+                const typeRow = rows[FIELD_KEYS.ESCALATION_TYPE];
+                if (key === 'escalation' && typeRow && typeRow.row.dataset.st === 'will-change') {
+                    setRowStatus(key, 'not-editable', 'پس از اعمال Escalation Type باز می‌شود و همان‌جا اعمال خواهد شد', null, 'deferred');
+                    return 'not-editable';
+                }
+                setRowStatus(key, 'not-editable', 'این فیلد در فرم قابل ویرایش نیست؛ اعمال نمی‌شود');
                 return 'not-editable';
             }
         }
@@ -1159,10 +1197,7 @@
         if (field.type === 'select') {
             option = findSelectableOption(info.element, pasted);
             if (!option) {
-                if (String(pasted) === '') {
-                    setRowStatus(key, 'same', 'مقدار خالی است و تغییری اعمال نمی‌شود');
-                    return 'same';
-                }
+                // (empty cells are already handled above, so a missing option always means an invalid value)
                 setRowStatus(key, 'invalid-select', 'مقدار در گزینه‌های سایت وجود ندارد؛ اعمال نمی‌شود');
                 return 'invalid-select';
             }
@@ -1175,10 +1210,10 @@
         else same = looseText(pasted) === looseText(current);
 
         if (same) {
-            setRowStatus(key, 'same', 'این داده با فرم موجود یکسان است');
+            setRowStatus(key, 'same', 'مقدار ردیف با فرم یکسان است؛ تغییری لازم نیست');
             return 'same';
         }
-        setRowStatus(key, 'will-change', 'این داده در فرم تغییر خواهد کرد', current);
+        setRowStatus(key, 'will-change', 'مقدار فرم تغییر خواهد کرد', current);
         return 'will-change';
     }
 
@@ -1230,6 +1265,7 @@
         return Boolean(pasted) && pasted !== normalize(selectedOptionText(info.element));
     }
 
+    // Re-evaluates all fields, counters, Apply state and the main message.
     function refreshAll() {
         if (!built) return;
         syncControl('cancellationDate');
@@ -1247,8 +1283,7 @@
 
         // v6.3.1: Disable Apply button when identity fails OR 0 fields will change
         const identity = validateIdentity();
-        const hasChanges = counts['will-change'] > 0;
-        applyButton.disabled = !identity.ok || !hasChanges || state.searching || state.calculating;
+        updateApplyState();
 
         if (state.searching || state.calculating) return;
         const invalidFields = WEB_FIELDS.filter(field => rows[field.key].row.dataset.st === 'invalid-select');
@@ -1282,6 +1317,7 @@
         return element ? String(element.value || '').trim() : '';
     }
 
+    // Polls until LL Name is filled (stops on cancel or timeout).
     function waitForLLName(maxMs, intervalMs, previousValue, requireChange = false) {
         return new Promise(resolve => {
             const start = Date.now();
@@ -1350,12 +1386,26 @@
     // ============================================================
     // 09. CLIPBOARD & ROW REVIEW
     // ============================================================
+    /** True when the paste box no longer matches the text that was reviewed. */
+    function isPasteStale() {
+        return state.parsed && pasteArea.value !== state.reviewedText;
+    }
+
+    // v6.3.3: Stale paste text also disables Apply (previously it only warned)
     function updatePasteRevisionWarning() {
-        const changed = state.parsed && pasteArea.value !== state.reviewedText;
+        const changed = isPasteStale();
         pasteWarning.textContent = changed
-            ? 'متن کادر پس از بررسی تغییر کرده است. نتیجه بررسی قبلی همچنان قابل اعمال است؛ برای استفاده از متن جدید، دوباره «بررسی» را بزنید.'
+            ? 'متن کادر پس از بررسی تغییر کرده است؛ تا بررسی دوباره، دکمهٔ «اعمال در فرم وب» غیرفعال است.'
             : '';
         pasteWarning.classList.toggle('epf-show', changed);
+        if (built) updateApplyState();
+    }
+
+    /** Single source of truth for the Apply button state. */
+    function updateApplyState() {
+        const busy = state.searching || state.calculating;
+        const hasChanges = WEB_FIELDS.some(field => rows[field.key] && rows[field.key].row.dataset.st === 'will-change');
+        applyButton.disabled = busy || !state.parsed || isPasteStale() || !hasChanges || !validateIdentity().ok;
     }
 
     // v6.3.1: Distinct label "توقف پیگیری" during Calculate and disable Apply when 0 changes exist
@@ -1367,10 +1417,10 @@
         if (ctBtn) ctBtn.disabled = busy;
         cancelButton.textContent = !busy ? 'انصراف' : (state.calculating ? 'توقف پیگیری' : 'لغو انتظار');
         cancelButton.disabled = false;
-        const hasChanges = WEB_FIELDS.some(f => rows[f.key] && rows[f.key].row.dataset.st === 'will-change');
-        applyButton.disabled = busy || !state.parsed || !validateIdentity().ok || !hasChanges;
+        updateApplyState();
     }
 
+    // Clears the review state and returns every field to its idle look.
     function resetParsedData() {
         state.webValues = {};
         state.outOfRange = {};
@@ -1383,7 +1433,7 @@
         updateHeaderIdentity();
         WEB_FIELDS.forEach(field => {
             syncControl(field.key);
-            setRowStatus(field.key, 'idle', 'پس از بررسی نمایش داده می‌شود');
+            setRowStatus(field.key, 'idle', 'پس از بررسی ردیف نمایش داده می‌شود');
         });
         applyButton.disabled = true;
         resetContractFix();
@@ -1507,6 +1557,7 @@
         el.dispatchEvent(new Event('blur', opts));
     }
 
+    // Writes one value into the live form control (events are dispatched by the caller).
     function applyOneField(field, value) {
         const info = targetInfo(field);
         const forceEditable = field.key === 'cancellationDate' && isCancellationDateEnabled();
@@ -1534,25 +1585,24 @@
         return { applied: true, element: info.element, field };
     }
 
-    function finishApply(changedCount, skippedInvalid, calcState, failedApply) {
+    /** Closes the modal and reports the whole apply run in one toast. */
+    function finishApply(changedCount, skippedInvalid, calcState, failedApply, calcSource) {
         closeModal(true);
 
-        let summary = `انتقال تمام شد: ${changedCount} فیلد تغییر کرد.`;
-        if (calcState === 'done') summary += ' محاسبه (Calculate) هم انجام شد.';
-        if (calcState === 'blocked') summary += ' Calculate اجرا نشد (درخواستی به سرور نرفت؛ احتمالاً اعتبارسنجی صفحه جلویش را گرفت) – آن را دستی بزنید.';
-        if (calcState === 'error') summary += ' Calculate با خطا روبه‌رو شد – آن را دستی بزنید.';
-        if (calcState === 'cancelled') summary += ' انتظار Calculate را لغو کردید؛ وضعیت Calculate را در فرم بررسی کنید و در صورت نیاز دستی بزنید.';
-        if (skippedInvalid.length) {
-            summary += ` فیلدهای نامعتبر select رد شدند: ${skippedInvalid.slice(0, 6).join('، ')}`;
-            if (skippedInvalid.length > 6) summary += ` و ${skippedInvalid.length - 6} مورد دیگر`;
-            summary += '.';
+        // Order: result, Calculate outcome, problems, then the "not saved" reminder
+        const shortList = items => items.slice(0, 6).join('، ') +
+            (items.length > 6 ? ` و ${faNum(items.length - 6)} مورد دیگر` : '');
+        let summary = `انتقال تمام شد: ${faNum(changedCount)} فیلد تغییر کرد.`;
+        if (calcState === 'done') {
+            summary += calcSource === 'form' ? ' Calculate هم با مبلغ فعلی فرم اجرا شد.' : ' Calculate هم اجرا شد.';
         }
-        if (failedApply && failedApply.length) {
-            summary += ` فیلدهای دارای خطا: ${failedApply.slice(0, 6).join('، ')}`;
-            if (failedApply.length > 6) summary += ` و ${failedApply.length - 6} مورد دیگر`;
-            summary += '.';
-        }
-        summary += ' ذخیره‌سازی انجام نشده؛ دکمه Save صفحه را خودتان بزنید.';
+        if (calcState === 'no-amount') summary += ' Calculate اجرا نشد: مبلغ معتبری در ردیف و فرم وجود ندارد؛ در صورت نیاز آن را دستی بزنید.';
+        if (calcState === 'blocked') summary += ' Calculate اجرا نشد: درخواستی به سرور نرفت (احتمالاً اعتبارسنجی صفحه مانع شد)؛ آن را دستی بزنید.';
+        if (calcState === 'error') summary += ' Calculate با خطا روبه‌رو شد؛ آن را دستی بزنید.';
+        if (calcState === 'cancelled') summary += ' انتظار Calculate را لغو کردید؛ وضعیت آن را روی فرم بررسی کنید و در صورت نیاز دستی بزنید.';
+        if (skippedInvalid.length) summary += ` فیلدهای لیستی با مقدار نامعتبر رد شدند: ${shortList(skippedInvalid)}.`;
+        if (failedApply && failedApply.length) summary += ` فیلدهایی که هنگام اعمال خطا دادند: ${shortList(failedApply)}.`;
+        summary += ' چیزی ذخیره نشده است؛ دکمهٔ Save صفحه را خودتان بزنید.';
         showToast(summary);
 
         pasteArea.value = '';
@@ -1560,9 +1610,42 @@
         clearMainMessage();
     }
 
+    /** Applies Escalation Type and waits for its postback; Apply continues only if the page confirmed it. */
+    async function seatEscalationTypeForApply(field) {
+        const result = applyOneField(field, getVal(field.key));
+        if (!result.applied) return { applied: false, aborted: false };
+
+        state.cancelRequested = false;
+        state.searching = true;
+        setBusy(true);
+        showMainMessage('در حال نشاندن Escalation Type؛ منتظر پاسخ سامانه بمانید...', 'info');
+        const response = await runAndWait(() => dispatchFieldEvents(result.element), 500, 8000, () => {
+            showMainMessage('سامانه هنوز پاسخ نداده است؛ ممکن است ارتباط کند یا نشست کاربری منقضی شده باشد.', 'warning');
+        });
+        state.searching = false;
+        setBusy(false);
+        syncAllSelects();
+
+        if (response.cancelled) {
+            refreshAll();
+            showMainMessage('انتظار را لغو کردید؛ فقط Escalation Type نشانده شده است. وضعیت فرم را بررسی کنید و برای ادامه دوباره «بررسی» را بزنید.', 'warning');
+            return { applied: true, aborted: true };
+        }
+        if (response.error || response.timeout) {
+            refreshAll();
+            showMainMessage('تغییر Escalation Type در سامانه تأیید نشد و بقیهٔ فیلدها اعمال نشدند؛ وضعیت صفحه را بررسی کنید.', 'error');
+            return { applied: true, aborted: true };
+        }
+        return { applied: true, aborted: false, item: result };
+    }
+
     /** Applies the last reviewed values and runs Calculate when required. */
     async function applyAllFields() {
         if (state.searching || state.calculating) return;
+        if (isPasteStale()) {
+            showMainMessage('متن کادر پس از بررسی تغییر کرده است؛ ابتدا دوباره «بررسی» را بزنید.', 'warning');
+            return;
+        }
         const identity = validateIdentity();
         if (!identity.ok) {
             applyButton.disabled = true;
@@ -1594,8 +1677,23 @@
             syncAllSelects();
         }
 
+        // v6.3.3: Seat Escalation Type first (it posts back) so Escalation % can open before it is evaluated
+        let escalationPreApplied = false;
+        const escalationField = FIELD_BY_KEY[FIELD_KEYS.ESCALATION_TYPE];
+        if (evaluateField(escalationField.key) === 'will-change') {
+            const pre = await seatEscalationTypeForApply(escalationField);
+            if (pre.aborted) return;
+            if (pre.applied) {
+                escalationPreApplied = true;
+                changedCount += 1;
+                greenCalcKeys.push(escalationField.key);
+                appliedItems.push(Object.assign({}, pre.item, { alreadyDispatched: true }));
+            }
+        }
+
         WEB_FIELDS.forEach(field => {
             if (field.key === 'cancellationLetter' && cancellationLetterPreApplied) return;
+            if (field.key === FIELD_KEYS.ESCALATION_TYPE && escalationPreApplied) return;
             const status = evaluateField(field.key);
             if (status === 'invalid-select') {
                 skippedInvalid.push(field.label);
@@ -1624,9 +1722,15 @@
             }
         });
 
-        const shouldCalculate = greenCalcKeys.length > 0 && amountIsValid();
-        if (!shouldCalculate) {
+        // Calculate only runs when a calculation-related field changed
+        if (greenCalcKeys.length === 0) {
             finishApply(changedCount, skippedInvalid, 'none', failedApply);
+            return;
+        }
+        // ...and only with a usable amount; otherwise say so instead of staying silent
+        const calcAmount = resolveCalcAmount();
+        if (!calcAmount.valid) {
+            finishApply(changedCount, skippedInvalid, 'no-amount', failedApply);
             return;
         }
 
@@ -1635,14 +1739,14 @@
             if (!fieldSat(FIELD_BY_KEY[key], getVal(key))) notSatLabels.push(FIELD_BY_KEY[key].label);
         });
         if (notSatLabels.length) {
-            showMainMessage('خطا: مقدار این فیلد(ها) در فرم ننشست و محاسبه انجام نشد: ' + notSatLabels.join('، '), 'error');
+            showMainMessage('خطا: مقدار این فیلدها در فرم ننشست و Calculate اجرا نشد: ' + notSatLabels.join('، '), 'error');
             refreshAll();
             return;
         }
 
         const calcBtn = document.getElementById(CALC_BTN_ID);
         if (!calcBtn) {
-            showMainMessage('فیلدها اعمال شدند، اما دکمه Calculate در صفحه پیدا نشد؛ محاسبه خودکار انجام نشد.', 'error');
+            showMainMessage('فیلدها اعمال شدند، اما دکمهٔ Calculate در صفحه پیدا نشد؛ Calculate خودکار اجرا نشد.', 'error');
             refreshAll();
             return;
         }
@@ -1662,7 +1766,7 @@
             if (response.cancelled) calcState = 'cancelled';
             else if (response.started === false) calcState = response.error ? 'error' : 'blocked';
             else if (response.error || response.timeout) calcState = 'error';
-            finishApply(changedCount, skippedInvalid, calcState, failedApply);
+            finishApply(changedCount, skippedInvalid, calcState, failedApply, calcAmount.source);
         });
     }
 
@@ -1685,12 +1789,14 @@
         return ctBox;
     }
 
+    // Sets the small status line under the Contract button.
     function setCtMsg(text, kind) {
         if (!ctMsg) return;
         ctMsg.textContent = text || '';
         ctMsg.className = 'epf-ct-msg' + (kind ? ' epf-ct-' + kind : '');
     }
 
+    // Hides and resets the Contract change box.
     function resetContractFix() {
         if (!ctBox) return;
         ctBox.hidden = true;
@@ -1699,6 +1805,7 @@
         setCtMsg('');
     }
 
+    // Shows the Contract button when the reviewed contract differs from the form.
     function renderContractFix() {
         if (!ctBox) return;
         if (state.contractChangeCompleted) {
@@ -1721,7 +1828,7 @@
         const opt = findOptionByText(ctInfo.element, pastedCt);
         if (!opt) {
             ctBtn.disabled = true;
-            setCtMsg('در لیست نیست', 'bad');
+            setCtMsg('در لیست سایت نیست', 'bad');
             return;
         }
         if (DATE_OPTIONAL_TYPES.indexOf(String(opt.textContent).trim().toUpperCase()) !== -1) {
@@ -1736,7 +1843,7 @@
         const opt = findOptionByText(info.element, getVal(FIELD_KEYS.CONTRACT_TYPE));
         if (!opt) {
             ctBtn.disabled = true;
-            setCtMsg('در لیست نیست', 'bad');
+            setCtMsg('در لیست سایت نیست', 'bad');
             return;
         }
         if (!info.editable) {
@@ -1755,7 +1862,7 @@
         }
 
         ctBtn.hidden = true;
-        setCtMsg('نوع قرارداد تغییر کرد ✓', 'ok');
+        setCtMsg('✓ نوع قرارداد تغییر کرد', 'ok');
         markContractChanged(String(opt.textContent || '').trim());
         syncAllSelects();
         refreshAll();
@@ -1821,7 +1928,12 @@
         }
         syncAllSelects();
         refreshAll();
-        setCtMsg('نوع قرارداد و Escalation Type تغییر کردند ✓ — باکس Escalation % روی فرم ظاهر شد؛ حالا «اعمال در فرم وب» را بزنید.', 'ok');
+        // Report what really happened: the % box opens only for some Escalation Type values
+        const percentInfo = targetInfo(FIELD_BY_KEY.escalation);
+        const percentOpen = percentInfo.exists && percentInfo.editable;
+        setCtMsg(percentOpen
+            ? '✓ نوع قرارداد و Escalation Type تغییر کردند. باکس Escalation % روی فرم باز شد؛ اکنون «اعمال در فرم وب» را بزنید.'
+            : '✓ نوع قرارداد و Escalation Type تغییر کردند؛ اکنون «اعمال در فرم وب» را بزنید.', 'ok');
     }
 
     // ============================================================
@@ -1840,6 +1952,7 @@
         saveButton: null
     };
 
+    // Shows a message in the settings panel.
     function setSettingsStatus(text, kind) {
         const box = settingsUi.statusBox;
         if (!box) return;
@@ -1850,8 +1963,9 @@
     /** Updates duplicate header count dynamically inside the legend text. */
     function updateDupLegendCount(dupCount) {
         if (!settingsUi.dupLegendEl) return;
-        const countStr = Number.isInteger(dupCount) && dupCount > 0 ? ` (${faNum(dupCount)} مورد - اولین ستون استفاده می‌شود)` : ' (اولین ستون استفاده می‌شود)';
-        settingsUi.dupLegendEl.textContent = 'زرد: تکراری' + countStr;
+        const countStr = Number.isInteger(dupCount) && dupCount > 0
+            ? ` (${faNum(dupCount)} مورد؛ اولین ستون استفاده می‌شود)` : ' (اولین ستون استفاده می‌شود)';
+        settingsUi.dupLegendEl.textContent = 'نارنجی: هدر تکراری' + countStr;
     }
 
     // v6.3.1: Render Site ID centered on top row and remaining 35 fields in a 5x7 grid
@@ -1872,9 +1986,11 @@
             const col = makeElement('span', 'epf-hcol');
 
             if (st.st === 'missing') {
-                name.classList.add('epf-h-missing');
+                // v6.3.3: only the mandatory headers are errors (red); other absent headers are just "not checked" (yellow)
+                const missingClass = REQUIRED_HEADER_KEYS.includes(field.key) ? 'epf-h-missing' : 'epf-h-absent';
+                name.classList.add(missingClass);
                 col.textContent = '—';
-                col.classList.add('epf-h-missing');
+                col.classList.add(missingClass);
             } else if (st.st === 'dup') {
                 name.classList.add('epf-h-dup');
                 col.textContent = Number.isInteger(st.col) ? String(st.col + 1) : '—';
@@ -1934,21 +2050,21 @@
             if (!result.hasSiteId) missingReq.push('Site ID');
             if (!result.hasContractType) missingReq.push('Contract Type');
             if (missingReq.length) {
-                setSettingsStatus('ستون‌های ضروری (' + missingReq.join(' و ') + ') در ردیف هدر یافت نشد؛ این دو ستون به همراه حداقل یک ستون دیگر الزامی هستند.', 'err');
+                setSettingsStatus('هدر الزامی یافت نشد: ' + missingReq.join(' و ') + '؛ وجود هر دو هدر Site ID و Contract Type به‌همراه دست‌کم یک هدر دیگر الزامی است.', 'err');
             } else {
-                setSettingsStatus('حداقل ۳ ستون معتبر (Site ID، Contract Type و حداقل یک ستون دیگر) باید در هدر وجود داشته باشد؛ فعلاً ' + faNum(result.mappedCount) + ' ستون شناسایی شد.', 'err');
+                setSettingsStatus('حداقل ۳ هدر شناخته‌شده لازم است (Site ID، Contract Type و دست‌کم یک هدر دیگر)؛ فعلاً ' + faNum(result.mappedCount) + ' هدر شناسایی شد.', 'err');
             }
             return;
         }
-        // v6.3.2: Keep settings status focused on the 36 main headers without listing unknown headers
+        // v6.3.3: Summary wording matches the grid colours (yellow = not checked, orange = duplicate)
         const dupCount = result.dupCount || 0;
         settingsUi.saveButton.disabled = false;
-        const summaryPrefix = faNum(result.mappedCount) + ' هدر از ' + faNum(WEB_FIELDS.length) + ' هدر شناسایی شد' +
-            (result.missing > 0 ? ' (' + faNum(result.missing) + ' ستون فاقد هدر بررسی نخواهند شد)' : '');
+        let summary = faNum(result.mappedCount) + ' فیلد از ' + faNum(WEB_FIELDS.length) + ' فیلد شناسایی شد';
+        if (result.missing > 0) summary += `؛ ${faNum(result.missing)} فیلد بدون هدر (زرد) بررسی نمی‌شوند`;
         if (dupCount) {
-            setSettingsStatus(summaryPrefix + '؛ ' + faNum(dupCount) + ' هدر تکراری دارد (زرد در جدول) که اولین ستون استفاده می‌شود. برای ثبت، «ذخیره هدر» را بزنید.', 'warn');
+            setSettingsStatus(summary + `؛ ${faNum(dupCount)} هدر تکراری است (نارنجی) و اولین ستون آن استفاده می‌شود. برای ثبت، «ذخیره هدر» را بزنید.`, 'warn');
         } else {
-            setSettingsStatus(summaryPrefix + '؛ برای ثبت، «ذخیره هدر» را بزنید.', 'ok');
+            setSettingsStatus(summary + '؛ برای ثبت، «ذخیره هدر» را بزنید.', 'ok');
         }
     }
 
@@ -1991,8 +2107,10 @@
 
         // v6.3.0: Updated settings guide reflecting flexible >=3 column rule
         const intro = makeElement('p', 'epf-settings-intro',
-            'ردیف عنوان ستون‌ها (Header) را از فایل اکسل کپی و با دکمه «پیست» در کادر زیر بریزید، سپس «بررسی هدر» را بزنید. وجود «Site ID» و «Contract Type» به همراه حداقل یک ستون دیگر (مجموعاً حداقل ۳ ستون از ' +
-            faNum(WEB_FIELDS.length) + ' ستون) الزامی است؛ ستون‌هایی که هدر نداشته باشند قرمز می‌شوند و هنگام بررسی نادیده گرفته می‌شوند. حروف بزرگ و کوچک و فاصله‌های اضافی در تطبیق نادیده گرفته می‌شوند.');
+                        'ردیف عنوان ستون‌های اکسل (Header) را کپی کنید، با دکمهٔ «پیست» در کادر زیر بریزید و «بررسی هدر» را بزنید. ' +
+            'هدر Site ID و Contract Type به‌همراه دست‌کم یک هدر دیگر الزامی است (حداقل ۳ هدر از ' + faNum(WEB_FIELDS.length) + ' هدر)؛ ' +
+            'بقیه اختیاری‌اند. فیلدِ بدون هدر زرد می‌شود و هنگام بررسی نادیده گرفته می‌شود. ' +
+            'تطبیق نام‌ها به حروف بزرگ و کوچک و فاصلهٔ اضافی حساس نیست.');
 
         const label = makeElement('label', 'epf-paste-label', 'ردیف هدر اکسل');
         label.htmlFor = 'epf-header-area';
@@ -2020,11 +2138,13 @@
 
         const legend = makeElement('div', 'epf-hlegend');
         legend.appendChild(makeElement('span', 'lg-title', 'راهنمای جدول:'));
-        legend.appendChild(makeElement('span', 'lg-def', 'خاکستری: پیش‌فرض'));
-        legend.appendChild(makeElement('span', 'lg-chg', 'سبز: شماره ستون تغییر کرده'));
-        settingsUi.dupLegendEl = makeElement('span', 'lg-dup', 'زرد: تکراری (اولین ستون استفاده می‌شود)');
+        // v6.3.3: Legend colours mirror the main modal (yellow = not checked) and the grid below
+        legend.appendChild(makeElement('span', 'lg-def', 'خاکستری: ستون پیش‌فرض'));
+        legend.appendChild(makeElement('span', 'lg-chg', 'سبز: شمارهٔ ستون تغییر کرده'));
+        legend.appendChild(makeElement('span', 'lg-abs', 'زرد: بدون هدر؛ بررسی نمی‌شود'));
+        settingsUi.dupLegendEl = makeElement('span', 'lg-dup', 'نارنجی: هدر تکراری (اولین ستون استفاده می‌شود)');
         legend.appendChild(settingsUi.dupLegendEl);
-        legend.appendChild(makeElement('span', 'lg-miss', 'قرمز: هدر ندارد (بررسی نمیشود)'));
+        legend.appendChild(makeElement('span', 'lg-miss', 'قرمز: هدر الزامی یافت نشد'));
 
         // v6.3.1: Wrapper with Site ID centered row on top + 5x7 grid below; top-left reset button; centered footer buttons
         const gridWrap = makeElement('div', 'epf-hgrid-wrap');
@@ -2052,12 +2172,13 @@
         let text = 'ثبت نشده';
         if (activeHeaderMapping) {
             mode = isDefaultMapping(activeHeaderMapping) ? 'default' : 'custom';
-            text = mode === 'default' ? 'پیشفرض' : 'سفارشی شده';
+            text = mode === 'default' ? 'پیش‌فرض' : 'سفارشی شده';
         }
         gearBtn.dataset.mode = mode;
         gearState.textContent = text;
     }
 
+    // Shows setup/storage notes above the paste box and enables Review.
     function updateMapNote() {
         const lines = [];
         if (initNote) lines.push(initNote);
@@ -2067,6 +2188,7 @@
         reviewButton.disabled = !activeHeaderMapping || state.searching || state.calculating;
     }
 
+    // Opens the header-mapping settings view.
     function openSettings() {
         if (state.searching || state.calculating || state.settingsOpen) return;
         buildSettings();
@@ -2106,6 +2228,7 @@
         settingsUi.headerArea.focus();
     }
 
+    // Returns from settings to the main view.
     function hideSettings() {
         state.settingsOpen = false;
         settingsView.hidden = true;
@@ -2123,6 +2246,7 @@
         updateMapNote();
     }
 
+    // Leaves settings, asking first when there are unsaved changes.
     async function leaveSettings() {
         if (!state.settingsOpen || state.confirmOpen) return;
         if (settingsUi.dirty) {
@@ -2164,8 +2288,8 @@
         reviewButton.disabled = false;
         pasteArea.focus();
         const savedCount = result.mappedCount || WEB_FIELDS.length;
-        showMainMessage(faNum(savedCount) + ' هدر از ' + faNum(WEB_FIELDS.length) + ' هدر تأیید شد و در حافظه مرورگر ذخیره شد' +
-            (stored ? '.' : '؛ ذخیره دائمی ممکن نیست و فقط تا پایان این نشست فعال است.'), stored ? 'success' : 'warning');
+        showMainMessage('هدر ذخیره شد؛ ' + faNum(savedCount) + ' فیلد از ' + faNum(WEB_FIELDS.length) + ' فیلد نگاشت شد' +
+            (stored ? ' و در حافظهٔ مرورگر ماند.' : '؛ ذخیرهٔ دائمی ممکن نیست و هدر فقط تا پایان این نشست فعال است.'), stored ? 'success' : 'warning');
     }
 
     // ============================================================
@@ -2198,6 +2322,7 @@
         fab.focus();
     }
 
+    // Resolves when no search/calculation is running (or after a timeout).
     function waitUntilIdle(maxMs) {
         return new Promise(resolve => {
             const start = Date.now();
@@ -2213,7 +2338,7 @@
     async function requestClose(confirmParsed) {
         if (state.confirmOpen) return;
         if (state.searching || state.calculating) {
-            const leave = await askConfirm('عملیات هنوز در انتظار پاسخ سامانه است. انتظار لغو شود و پنجره بسته شود؟ (وضعیت فرم را بعداً بررسی کنید.)', 'لغو و بستن', 'ادامه انتظار');
+            const leave = await askConfirm('عملیات هنوز در انتظار پاسخ سامانه است. انتظار لغو شود و پنجره بسته شود؟ وضعیت فرم را بعداً بررسی کنید.', 'لغو و بستن', 'ادامه انتظار');
             if (!leave) return;
             cancelActiveWait();
             await waitUntilIdle(1500);
@@ -2228,6 +2353,7 @@
     }
 
     let toastTimer = null;
+    // Shows a short floating message.
     function showToast(message, duration) {
         toast.textContent = message;
         toast.classList.add('epf-toast-show');
@@ -2299,6 +2425,7 @@
         LL_NAME_ID
     ]);
 
+    // Re-checks the modal when Site ID / Contract fields change on the page.
     function onIdentityFieldChanged(event) {
         if (event.target && identityIds.has(event.target.id)) {
             if (!state.searching && event.target.id === SITE_ID_INPUT_ID) state.searchConfirmed = false;
@@ -2309,6 +2436,7 @@
     document.addEventListener('input', onIdentityFieldChanged, true);
     document.addEventListener('change', onIdentityFieldChanged, true);
 
+    // Re-checks the modal after every ASP.NET partial postback.
     function hookPageRefresh() {
         const prm = getPRM();
         if (prm && typeof prm.add_endRequest === 'function') {
