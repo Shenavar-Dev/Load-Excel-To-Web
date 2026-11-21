@@ -1,0 +1,2251 @@
+// ==UserScript==
+// @name         BTS Property Excel Assistant
+// @namespace    https://btsproperty.mtnirancell.ir/
+// @version      6.2.2
+// @description  Header-based Excel review and safe form population for BTS Property
+// @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+/*
+ * Version 6.2.2 (اصلاح چیدمان و رفع باگ‌های Cancellation Letter و رنگ پیام‌ها)
+ * اصلاحات این نسخه:
+ * - رفع به‌هم‌ریختگی بصری: جداسازی ردیف فیلد Cancellation Letter Comment و تنظیم عرض برچسب‌ها.
+ * - قرمز شدن هشدار جابه‌جایی ستون‌ها: وقتی چند فیلد نامعتبر وجود دارد، پیام با رنگ قرمز (error) نمایش داده می‌شود.
+ * - اصلاح باگ Cancellation Letter Submission Date: هنگامی که Cancellation Letter برابر YES انتخاب می‌شود،
+ *   باکس تاریخ چه در پیش‌نمایش و چه هنگام اعمال روی فرم به‌عنوان قابل ویرایش (سبز/will-change) شناسایی شده
+ *   و مقدار تاریخ به‌درستی روی فرم می‌نشیند.
+ */
+
+(function () {
+    'use strict';
+
+    if (document.getElementById('epf-root')) return;
+
+    // ============================================================
+    // 01. FIELD DEFINITIONS & HEADER MAPPING
+    // ============================================================
+    const WEB_FIELDS = [
+        { key: 'siteId', label: 'Site ID', id: 'Content_Txt_SiteID', type: 'input', group: 'identity' },
+        { key: 'contractType', label: 'Contract Type', id: 'ddl_Contract_type', type: 'select', group: 'identity' },
+        { key: 'llName', label: 'LL Name', id: 'Content_txt_LLNAME', type: 'input', group: 'identity' },
+        { key: 'ownerType', label: 'Owner Type', id: 'Content_DDL_OWNER_TYPE', type: 'select', group: 'identity' },
+        { key: 'startDate', label: 'Start Date', id: 'Content_TB_LAST_LEASE_START_SHAMSI', type: 'input', group: 'dates' },
+        { key: 'endDate', label: 'End Date', id: 'Content_TB_LAST_LEASE_END_SHAMSI', type: 'input', group: 'dates' },
+        { key: 'taxType', label: 'Tax Type', id: 'Content_DDL_TAX_TYPE', type: 'select', group: 'finance' },
+        { key: 'contractAmount', label: 'Contract Gross Yearly Base', id: 'Content_TB_CONTRACT_AMOUNT', type: 'input', group: 'finance' },
+        { key: 'escalationType', label: 'Escalation Type', id: 'Content_DDL_ESCALATION_Type', type: 'select', group: 'finance' },
+        { key: 'escalation', label: 'Escalation %', id: 'Content_DDL_ESCALATION', type: 'select', group: 'finance' },
+        { key: 'llCount', label: 'LL Count', id: 'Content_DDL_LL_COUNT', type: 'select', group: 'finance' },
+        { key: 'paymentTerm', label: 'Payment Term', id: 'Content_DDL_PAYMENT_TERM', type: 'select', group: 'payment' },
+        { key: 'advancePayment', label: 'Advance Payment', id: 'Content_TB_ADVANCE_PAYMENT', type: 'input', group: 'payment' },
+        { key: 'paymentComment', label: 'Payment Comment', id: 'Content_TB_PAYMENT_COMMENT', type: 'input', group: 'payment' },
+        { key: 'paymentStatus', label: 'Payment Status', id: 'Content_DDL_PAYMENT_STATUS', type: 'select', group: 'payment' },
+        { key: 'prtRegion', label: 'PRT Region', id: 'Content_DDL_PRT_REGION', type: 'select', group: 'region' },
+        { key: 'mpZone', label: 'MP Zone', id: 'Content_TB_MP_ZONE', type: 'input', group: 'region' },
+        { key: 'installType', label: 'Install Type', id: 'Content_DDL_INSTALL_TYPE', type: 'select', group: 'region' },
+        { key: 'depends', label: 'Depends', id: 'Content_TB_DEPENDS', type: 'input', group: 'region' },
+        { key: 'pType', label: 'P Type', id: 'Content_DDL_P_TYPE', type: 'select', group: 'region' },
+        { key: 'nationalId', label: 'National ID', id: 'Content_TB_NATIONAL_ID', type: 'input', group: 'owner' },
+        { key: 'llManner', label: 'LL Manner', id: 'Content_DDL_LL_MANNER', type: 'select', group: 'owner' },
+        { key: 'legalHistory', label: 'Legal History', id: 'Content_DDL_LEGAL_HISTORY', type: 'select', group: 'owner' },
+        { key: 'accessTypeLease', label: 'Access Type Lease', id: 'Content_DDL_ACCESS_TYPE_LEASE_BASE', type: 'select', group: 'owner' },
+        { key: 'accessTypeLL', label: 'Access Type LL', id: 'Content_DDL_ACCESS_TYPE_LL_BASE', type: 'select', group: 'owner' },
+        { key: 'address', label: 'Address', id: 'Content_TB_ADDRESS', type: 'textarea', group: 'owner' },
+        { key: 'phoneNumber', label: 'Phone Number', id: 'Content_TB_PHONE_NUMBER', type: 'input', group: 'owner' },
+        { key: 'llChanges', label: 'LL Changes', id: 'Content_DDL_LL_CHANGES', type: 'select', group: 'status' },
+        { key: 'signatureStatus', label: 'Signature Status', id: 'Content_DDL_SIGNATURE_STATUS', type: 'select', group: 'status' },
+        { key: 'renewalStatus', label: 'Renewal Status', id: 'Content_DDL_RENEWAL_STATUS', type: 'select', group: 'status' },
+        { key: 'leaseType', label: 'Lease Type', id: 'Content_DDL_LEASE_TYPE', type: 'select', group: 'status' },
+        { key: 'renewalOwner', label: 'Renewal Owner', id: 'Content_TB_RENEWAL_OWNER', type: 'input', group: 'status' },
+        { key: 'cancellationLetter', label: 'Cancellation Letter', id: 'Content_DDL_CANCELLATION_LETTER', type: 'select', group: 'status' },
+        { key: 'cancellationDate', label: 'Cancellation Letter Submission Date', id: 'Content_TB_CANCELLATION_LETTER_SUBMISSION_DATE', type: 'input', group: 'status' },
+        { key: 'cancellationComment', label: 'Cancellation Letter Comment', id: 'Content_TB_CANCELLATION_LETTER_COMMENT', type: 'textarea', group: 'status' },
+        { key: 'extraComment', label: 'Extra Comment', id: 'Content_TB_EXTRA_COMMENT', type: 'textarea', group: 'status' }
+    ];
+
+    const FIELD_BY_KEY = Object.create(null);
+    WEB_FIELDS.forEach(field => { FIELD_BY_KEY[field.key] = field; });
+
+    const FIELD_KEYS = {
+        SITE_ID: 'siteId', CONTRACT_TYPE: 'contractType', AMOUNT: 'contractAmount',
+        ESCALATION_TYPE: 'escalationType', START_DATE: 'startDate', END_DATE: 'endDate'
+    };
+    const CALC_FIELD_KEYS = ['taxType', 'contractAmount', 'escalationType', 'escalation', 'llCount'];
+    const HEADER_STORAGE_KEY = 'epf:bts-excel-paste:header-row:v1';
+
+    function normalizeHeader(value) {
+        return String(value == null ? '' : value).replace(/^\uFEFF/, '').trim().replace(/\s+/g, ' ').toLowerCase();
+    }
+
+    function faNum(value) {
+        return String(value).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[digit]);
+    }
+
+    /** Maps each required field to its Excel column and classifies its header state. */
+    function buildHeaderMapping(headerText) {
+        const parsedRows = parseTSV(headerText);
+        if (!parsedRows.length || parsedRows.length > 1) {
+            return { parsed: false, ready: false, missing: 0 };
+        }
+
+        const normalized = parsedRows[0].map(normalizeHeader);
+        const columns = Object.create(null);
+        const states = Object.create(null);
+        let missing = 0;
+        let dupCount = 0;
+
+        WEB_FIELDS.forEach(field => {
+            const wanted = normalizeHeader(field.label);
+            const matches = [];
+            normalized.forEach((name, index) => {
+                if (name === wanted) matches.push(index);
+            });
+            if (!matches.length) {
+                states[field.key] = { st: 'missing', col: null };
+                missing += 1;
+                return;
+            }
+            columns[field.key] = matches[0];
+            if (matches.length > 1) dupCount += 1;
+            states[field.key] = { st: matches.length > 1 ? 'dup' : 'ok', col: matches[0] };
+        });
+
+        return { parsed: true, ready: missing === 0, missing, columns, states, cellCount: parsedRows[0].length, dupCount };
+    }
+
+    /** Identity mapping: default column order equals the field index. */
+    function defaultMapping() {
+        const columns = Object.create(null);
+        const states = Object.create(null);
+        WEB_FIELDS.forEach((field, index) => {
+            columns[field.key] = index;
+            states[field.key] = { st: 'ok', col: index };
+        });
+        return { parsed: true, ready: true, missing: 0, columns, states, cellCount: WEB_FIELDS.length, dupCount: 0 };
+    }
+
+    /** True when every field sits on its default column (the 1..N order). */
+    function isDefaultMapping(mapping) {
+        return Boolean(mapping) && WEB_FIELDS.every((field, index) => mapping.columns[field.key] === index);
+    }
+
+    function loadStoredHeader() {
+        try {
+            const value = window.localStorage.getItem(HEADER_STORAGE_KEY);
+            return value == null ? '' : value;
+        } catch (error) {
+            initNote = 'ذخیره‌سازی مرورگر در دسترس نیست؛ هدر فقط در همین نشست قابل استفاده است.';
+            return '';
+        }
+    }
+
+    function persistHeader(headerText) {
+        try {
+            window.localStorage.setItem(HEADER_STORAGE_KEY, headerText);
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function extractValues(cells, mapping) {
+        if (!mapping) {
+            return { ok: false, message: 'ابتدا هدر اکسل را در «تنظیمات نگاشت هدر» ثبت کنید.' };
+        }
+        const missing = WEB_FIELDS.filter(field => mapping.columns[field.key] >= cells.length);
+        if (missing.length) {
+            return {
+                ok: false,
+                message: 'ردیف داده برای این ستون‌های هدر مقدار یا سلول ندارد: ' + missing.map(field => field.label).join('، ')
+            };
+        }
+
+        const webValues = {};
+        WEB_FIELDS.forEach(field => {
+            const value = String(cells[mapping.columns[field.key]] == null ? '' : cells[mapping.columns[field.key]]);
+            webValues[field.key] = field.type === 'textarea' ? value : value.replace(/\n/g, ' ');
+        });
+        return { ok: true, webValues };
+    }
+
+    function parseTSV(text) {
+        const source = String(text || '').replace(/\r\n?/g, '\n').replace(/[\u2028\u2029]/g, '\n');
+        const rows = [];
+        let row = [];
+        let cell = '';
+        let quoted = false;
+        let cellStart = true;
+
+        for (let index = 0; index < source.length; index++) {
+            const char = source[index];
+            if (quoted) {
+                if (char === '"') {
+                    if (source[index + 1] === '"') { cell += '"'; index++; }
+                    else quoted = false;
+                } else cell += char;
+                continue;
+            }
+            if (char === '"' && cellStart) { quoted = true; cellStart = false; continue; }
+            if (char === '\t') { row.push(cell); cell = ''; cellStart = true; continue; }
+            if (char === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; cellStart = true; continue; }
+            cell += char;
+            cellStart = false;
+        }
+        row.push(cell);
+        rows.push(row);
+        return rows.filter(item => !(item.length === 1 && item[0].trim() === ''));
+    }
+
+    const GROUPS = [
+        { id: 'identity', title: 'هویت قرارداد' },
+        { id: 'dates', title: 'تاریخ‌ها' },
+        { id: 'finance', title: 'مالی و محاسبه' },
+        { id: 'payment', title: 'پرداخت' },
+        { id: 'region', title: 'منطقه و نصب' },
+        { id: 'owner', title: 'مالک و تماس' },
+        { id: 'status', title: 'وضعیت و توضیحات' }
+    ];
+
+    // Optimized visual grid layout for compact height & minimal scroll (Cleaned up status section layout)
+    const MODAL_ROWS = [
+        { id: 'identity', rows: [{ fields: ['siteId', 'contractType'], facing: true }, { fields: ['llName', 'ownerType'], facing: true }] },
+        { id: 'dates', rows: [{ fields: ['startDate', 'endDate'], facing: true }] },
+        { id: 'finance', rows: [{ fields: ['taxType', 'contractAmount', 'escalationType'] }, { fields: ['escalation', 'llCount'], facing: true }] },
+        { id: 'payment', rows: [{ fields: ['paymentTerm', 'advancePayment', 'paymentStatus'] }, { fields: ['paymentComment'] }] },
+        { id: 'region', rows: [{ fields: ['prtRegion', 'mpZone', 'installType'] }, { fields: ['depends', 'pType'], facing: true }] },
+        { id: 'owner', rows: [{ fields: ['nationalId', 'llManner', 'phoneNumber'] }, { fields: ['legalHistory', 'accessTypeLease', 'accessTypeLL'] }, { fields: ['address'] }] },
+        { id: 'status', rows: [{ fields: ['llChanges', 'signatureStatus', 'renewalStatus'] }, { fields: ['leaseType', 'renewalOwner', 'cancellationLetter'] }, { fields: ['cancellationDate'] }, { fields: ['cancellationComment'] }, { fields: ['extraComment'] }] }
+    ];
+
+    const CALC_BTN_ID = 'Content_btn_CalculateAmount';
+    const LL_NAME_ID = 'Content_txt_LLNAME';
+    const SEARCH_BTN_ID = 'Content_btn_Search';
+    const SITE_ID_INPUT_ID = 'Content_Txt_SiteID';
+    const SITE_INSERT_INPUT_ID = 'Content_Txt_Site_ID_insert';
+    const DATE_OPTIONAL_TYPES = ['NOT DELIVERED', 'SITE SHARING', 'PURCHASED'];
+
+    let initNote = '';
+    let activeHeaderText = loadStoredHeader();
+    let activeHeaderMapping = null;
+    if (activeHeaderText) {
+        const bootResult = buildHeaderMapping(activeHeaderText);
+        if (bootResult.parsed && bootResult.ready) {
+            activeHeaderMapping = { columns: bootResult.columns, cellCount: bootResult.cellCount };
+        } else initNote = 'هدر ذخیره‌شده معتبر نیست؛ از تنظیمات نگاشت هدر دوباره ثبت کنید.';
+    }
+
+    const state = {
+        webValues: {},
+        parsed: false,
+        reviewedText: '',
+        searchConfirmed: false,
+        headerContract: '',
+        contractChangeCompleted: false,
+        confirmOpen: false,
+        isOpen: false,
+        settingsOpen: false,
+        refreshQueued: false,
+        searching: false,
+        calculating: false,
+        cancelRequested: false
+    };
+
+    function getVal(key) {
+        const value = state.webValues[key];
+        return value === undefined ? '' : value;
+    }
+
+    const controls = Object.create(null);
+    const rows = Object.create(null);
+    const groupEls = [];
+    const modalRowEls = [];
+    let built = false;
+    let contractFixTimer = null;
+    let ctBox = null;
+    let ctBtn = null;
+    let ctMsg = null;
+
+    // ============================================================
+    // 02. TEXT & DOM UTILITIES
+    // ============================================================
+
+    function fixChars(s) {
+        return s.replace(/\u064A/g, '\u06CC').replace(/\u0643/g, '\u06A9');
+    }
+
+    function normalize(value) {
+        return fixChars(String(value == null ? '' : value)).trim().toLowerCase();
+    }
+
+    function normalizeStrong(value) {
+        return fixChars(String(value == null ? '' : value))
+            .replace(/\u200c/g, '')
+            .replace(/\s+/g, '')
+            .trim()
+            .toLowerCase();
+    }
+
+    function looseText(value) {
+        return fixChars(String(value == null ? '' : value))
+            .replace(/[\u200e\u200f]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+    }
+
+    function stripCommas(value) {
+        return String(value == null ? '' : value).replace(/,/g, '').trim();
+    }
+
+    function makeElement(tagName, className, text) {
+        const el = document.createElement(tagName);
+        if (className) el.className = className;
+        if (text !== undefined) el.textContent = text;
+        return el;
+    }
+
+    function isElementDisabled(el) {
+        if (!el) return true;
+        return Boolean(el.disabled || el.readOnly ||
+            (typeof el.matches === 'function' && el.matches(':disabled')));
+    }
+
+    function getPRM() {
+        try {
+            const w = window.Sys && window.Sys.WebForms;
+            return w && w.PageRequestManager ? w.PageRequestManager.getInstance() : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function targetInfo(field) {
+        const el = field.id ? document.getElementById(field.id) : null;
+        if (!el) return { element: null, exists: false, typeMatches: false, editable: false };
+
+        const tag = el.tagName.toLowerCase();
+        const typeMatches = field.type === 'input' ? tag === 'input'
+            : field.type === 'select' ? tag === 'select'
+            : field.type === 'textarea' ? tag === 'textarea'
+            : false;
+
+        if (!typeMatches) return { element: el, exists: true, typeMatches: false, editable: false };
+        return { element: el, exists: true, typeMatches: true, editable: !isElementDisabled(el) };
+    }
+
+    function findSelectableOption(selectEl, value) {
+        if (!selectEl || selectEl.tagName.toLowerCase() !== 'select') return null;
+        const wanted = normalize(value);
+        const wantedStrong = normalizeStrong(value);
+
+        const options = Array.from(selectEl.options || []).filter(opt => {
+            const group = opt.parentElement;
+            return !opt.disabled && !(group && group.tagName && group.tagName.toLowerCase() === 'optgroup' && group.disabled);
+        });
+
+        let match = options.find(opt => normalize(opt.value) === wanted);
+        if (match) return match;
+
+        match = options.find(opt => normalize(opt.textContent) === wanted);
+        if (match) return match;
+
+        match = options.find(opt => normalizeStrong(opt.value) === wantedStrong);
+        if (match) return match;
+
+        match = options.find(opt => normalizeStrong(opt.textContent) === wantedStrong);
+        return match || null;
+    }
+
+    function findOptionByText(selectEl, value) {
+        if (!selectEl || selectEl.tagName.toLowerCase() !== 'select') return null;
+        const options = Array.from(selectEl.options || []).filter(o => !o.disabled);
+        const w = normalize(value);
+        let m = options.find(o => normalize(o.textContent) === w);
+        if (m) return m;
+        const ws = normalizeStrong(value);
+        return options.find(o => normalizeStrong(o.textContent) === ws) || null;
+    }
+
+    function selectedOptionText(selectEl) {
+        if (!selectEl || selectEl.tagName.toLowerCase() !== 'select') return '';
+        const selected = selectEl.selectedOptions && selectEl.selectedOptions.length
+            ? selectEl.selectedOptions[0]
+            : (selectEl.selectedIndex >= 0 ? selectEl.options[selectEl.selectedIndex] : null);
+        return selected ? String(selected.textContent || '').trim() : '';
+    }
+
+    function getCurrentFormValue(field) {
+        const info = targetInfo(field);
+        if (!info.exists || !info.typeMatches) return '';
+        if (field.type === 'select') {
+            return selectedOptionText(info.element);
+        }
+        return String(info.element.value || '').trim();
+    }
+
+    function amountIsValid() {
+        const raw = stripCommas(getVal(FIELD_KEYS.AMOUNT));
+        if (!raw) return false;
+        const n = Number(raw);
+        return !isNaN(n) && n > 0;
+    }
+
+    function fieldSat(field, pastedValue) {
+        const info = targetInfo(field);
+        if (!info.exists || !info.typeMatches) return false;
+        if (field.type === 'select') {
+            const opt = findSelectableOption(info.element, pastedValue);
+            if (!opt) return false;
+            return String(info.element.value) === String(opt.value);
+        }
+        if (field.key === FIELD_KEYS.AMOUNT) {
+            return stripCommas(info.element.value) === stripCommas(pastedValue);
+        }
+        return looseText(info.element.value) === looseText(pastedValue);
+    }
+
+    // ============================================================
+    // 03. ASP.NET REQUEST HANDLING
+    // ============================================================
+
+    let activeWait = null;
+
+    /** Releases the wait in progress; read-only waits (search) also abort their request. */
+    function cancelActiveWait() {
+        state.cancelRequested = true;
+        if (activeWait) activeWait.cancel();
+        state.searching = false;
+        state.calculating = false;
+        setBusy(false);
+    }
+
+    /** Runs an action and waits for its ASP.NET partial postback (cancellable). */
+    function runAndWait(action, startMs, maxMs, onSlow, options) {
+        const opts = options || {};
+        return new Promise(resolve => {
+            const prm = getPRM();
+            if (!prm) {
+                let timer = null;
+                let finished = false;
+                const finishLocal = result => {
+                    if (finished) return;
+                    finished = true;
+                    clearTimeout(timer);
+                    if (activeWait === handle) activeWait = null;
+                    resolve(result);
+                };
+                const handle = { cancel: () => finishLocal({ started: null, error: null, cancelled: true }) };
+                activeWait = handle;
+                try { action(); } catch (error) { finishLocal({ started: false, error }); return; }
+                timer = setTimeout(() => finishLocal({ started: null, error: null }), 2500);
+                return;
+            }
+
+            let started = false;
+            let done = false;
+            let startTimer;
+            let slowTimer;
+            let maxTimer;
+
+            const finish = result => {
+                if (done) return;
+                done = true;
+                clearTimeout(startTimer);
+                clearTimeout(slowTimer);
+                clearTimeout(maxTimer);
+                if (activeWait === handle) activeWait = null;
+                try { prm.remove_beginRequest(onBegin); } catch (error) { /* ignore */ }
+                try { prm.remove_endRequest(onEnd); } catch (error) { /* ignore */ }
+                setTimeout(() => resolve(result), 150);
+            };
+            const handle = {
+                cancel: () => {
+                    if (opts.abortOnCancel) {
+                        try { if (prm.get_isInAsyncPostBack()) prm.abortPostBack(); } catch (error) { /* ignore */ }
+                    }
+                    finish({ started, error: null, cancelled: true });
+                }
+            };
+            const onBegin = () => {
+                started = true;
+                clearTimeout(startTimer);
+            };
+            const onEnd = (sender, args) => {
+                if (!started) return;
+                let error = null;
+                try { error = args && args.get_error ? args.get_error() : null; } catch (readError) { error = readError; }
+                finish({ started: true, error });
+            };
+
+            activeWait = handle;
+            prm.add_beginRequest(onBegin);
+            prm.add_endRequest(onEnd);
+            startTimer = setTimeout(() => {
+                if (!started) finish({ started: false, error: null });
+            }, startMs);
+            slowTimer = setTimeout(() => {
+                if (!done && onSlow) onSlow();
+            }, 4000);
+            maxTimer = setTimeout(() => finish({ started, error: null, timeout: true }), maxMs);
+
+            try { action(); } catch (error) { finish({ started: false, error }); }
+        });
+    }
+
+    // ============================================================
+    // 04. STYLES & MODAL STRUCTURE
+    // ============================================================
+
+    const styleElement = makeElement('style');
+    styleElement.id = 'epf-style';
+    styleElement.textContent = `
+        #epf-root, #epf-root * { box-sizing: border-box; }
+        #epf-root {
+            --pri: #004E5B; --pri-d: #003D47; --acc: #F4C300; --ink: #243238; --mut: #5e6d73;
+            --line: #dbe2e5; --ok: #218838; --warn: #9a7b0a; --bad: #c82333;
+            font-family: Irancell, Tahoma, sans-serif; direction: rtl;
+        }
+        #epf-root [hidden] { display: none !important; }
+        #epf-root button, #epf-root input, #epf-root select, #epf-root textarea { font-family: inherit; }
+        .swal2-container { z-index: 20000 !important; }
+        #epf-fab {
+            position: fixed; left: 24px; bottom: 80px; z-index: 9998; display: inline-flex;
+            align-items: center; justify-content: center; gap: 10px; min-height: 52px; padding: 0 22px;
+            border: 0; border-radius: 50px; background: linear-gradient(135deg, #F4C300, #ffd84d);
+            color: var(--pri); font-size: 15px; font-weight: 700; box-shadow: 0 5px 18px rgba(244,195,0,.38);
+            cursor: pointer; transition: transform .18s ease, box-shadow .18s ease;
+        }
+        #epf-fab:hover { transform: translateY(-3px) scale(1.035); box-shadow: 0 8px 22px rgba(244,195,0,.48); }
+        #epf-fab:focus-visible, #epf-root button:focus-visible, #epf-root input:focus-visible,
+        #epf-root select:focus-visible, #epf-root textarea:focus-visible { outline: 2px solid var(--pri); outline-offset: 2px; }
+        .epf-fab-icon { font-size: 19px; line-height: 1; }
+        #epf-overlay {
+            position: fixed; inset: 0; z-index: 10001; display: none; align-items: center; justify-content: center;
+            padding: 16px; background: rgba(30,25,21,.55); backdrop-filter: blur(4px);
+        }
+        #epf-overlay.epf-open { display: flex; }
+        #epf-modal {
+            width: min(96vw, 1040px); height: min(92vh, 900px); max-height: 92vh; display: flex;
+            flex-direction: column; overflow: hidden; background: #fff; color: var(--ink); border-radius: 14px;
+            box-shadow: 0 18px 60px rgba(0,0,0,.28); direction: rtl; animation: epf-enter .2s ease-out;
+        }
+        @keyframes epf-enter { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .epf-header { position: relative; flex: 0 0 auto; padding: 10px 16px 9px; background: var(--pri); color: #fff; }
+        .epf-header-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .epf-title-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .epf-title { margin: 0; font-size: 15.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .epf-identity { flex: 0 1 auto; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            direction: ltr; font-size: 12px; font-weight: 700; color: #a5d6a7; background: rgba(255,255,255,.1); padding: 3px 10px; border-radius: 12px; }
+        .epf-xbtn { flex: 0 0 auto; width: 27px; height: 27px; display: inline-flex; align-items: center; justify-content: center;
+            border: 0; border-radius: 6px; background: rgba(255,255,255,.16); color: #fff; font-size: 14px; line-height: 1; cursor: pointer; }
+        .epf-xbtn:hover { background: rgba(255,255,255,.3); }
+        .epf-subtitle { margin: 4px 0 6px; font-size: 11.5px; line-height: 1.6; color: rgba(255,255,255,.88); text-align: right; }
+        .epf-gear {
+            flex: 0 0 auto; display: inline-flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px 10px;
+            border: 1px solid #9bd5ff; border-radius: 7px; background: #cceaff; color: #14527f;
+            font-size: 11px; font-weight: 700; cursor: pointer;
+        }
+        .epf-gear:hover:not(:disabled) { background: #b5ddfa; }
+        .epf-gear:disabled { opacity: .45; cursor: not-allowed; }
+        .epf-gear-main { font-size: 11px; font-weight: 700; }
+        .epf-gear-state { font-size: 10px; font-weight: 400; line-height: 1.25; }
+        .epf-gear[data-mode="custom"] .epf-gear-state { color: #8a3b00; font-weight: 700; }
+        .epf-gear[data-mode="none"] .epf-gear-state { color: #a33; }
+        .epf-paste-label { display: block; margin: 0 0 4px; font-size: 12px; font-weight: 700; text-align: right; }
+        .epf-paste-layout { display: grid; grid-template-columns: minmax(0, 1fr) 142px; gap: 8px; direction: ltr; align-items: stretch; }
+        #epf-paste-area {
+            display: block; width: 100%; min-height: 48px; max-height: 76px; resize: vertical; padding: 6px 9px;
+            border: 1px solid #cbd3d6; border-radius: 7px; background: #fbfcfc; color: var(--ink);
+            font-size: 12px; line-height: 1.5; direction: ltr; text-align: left; white-space: pre; overflow-wrap: normal;
+        }
+        .epf-paste-actions { display: flex; flex-direction: row; gap: 6px; }
+        .epf-paste-actions .epf-btn { flex: 1; min-width: 0; min-height: 48px; padding: 5px 6px; }
+        #epf-map-note, #epf-paste-warning {
+            display: none; margin: 0 0 5px; padding: 4px 8px; border-radius: 6px; font-size: 11px; line-height: 1.55;
+            white-space: pre-wrap;
+        }
+        #epf-map-note.epf-show { display: block; color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
+        #epf-paste-warning.epf-show { display: block; margin: 5px 0 0; color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
+        .epf-btn { border: 0; border-radius: 7px; cursor: pointer; padding: 8px 15px; font-size: 12px; font-weight: 700; }
+        .epf-btn:disabled { opacity: .5; cursor: not-allowed; }
+        .epf-btn-primary { color: var(--pri); background: var(--acc); }
+        .epf-btn-apply { color: #fff; background: var(--ok); }
+        .epf-btn-secondary { color: #45545a; background: #e9edef; }
+        .epf-content { flex: 1 1 auto; min-height: 0; padding: 10px 14px; overflow: auto; overscroll-behavior: contain; }
+        #epf-main-message { display: none; margin: 0 0 8px; padding: 6px 9px; border-radius: 7px; font-size: 11.5px; line-height: 1.65; white-space: pre-wrap; }
+        #epf-main-message.epf-show { display: block; }
+        .epf-msg-error { color: #842029; background: #f8d7da; border: 1px solid #f5c6cb; }
+        .epf-msg-success { color: #155724; background: #d4edda; }
+        .epf-msg-info { color: #174b58; background: #e8f1f3; }
+        .epf-msg-warning { color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
+        #epf-fields { display: block; }
+        .epf-section { margin-top: 9px; padding: 0 9px 9px; overflow: hidden; border: 1px solid #cce3eb; border-radius: 8px; background: #fdfefe; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+        .epf-section:first-child { margin-top: 0; }
+        .epf-section-title { margin: 0 -9px 7px; padding: 4px 10px; text-align: center; font-size: 12px; font-weight: 700; color: var(--pri);
+            background: #fff9e6; border-bottom: 1px solid #eadeb8; }
+        .epf-mrow { display: flex; direction: ltr; gap: 7px; }
+        .epf-mrow + .epf-mrow { margin-top: 6px; }
+        .epf-fcell { flex: 1 1 0; min-width: 0; display: flex; gap: 6px; align-items: flex-start; padding: 5px 8px;
+            border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+        .epf-mrow.epf-facing .epf-fcell { flex: 1 1 0; }
+        .epf-fcell.epf-fwcell { flex: 1 1 100%; }
+        .epf-fcell[data-st="will-change"] { background: #f2faf3; border-color: #b9dfc0; }
+        .epf-fcell[data-st="same"] { background: #f4f6f7; border-color: #d8dedf; }
+        .epf-fcell[data-st="not-editable"] { background: #fffbeb; border-color: #f0d78c; }
+        .epf-fcell[data-st="invalid-select"] { background: #fff4f4; border-color: #efb7bd; }
+        #epf-fields.epf-only-changes .epf-fcell:not([data-st="will-change"]) { display: none; }
+        .epf-flabel { flex: 0 0 135px; max-width: 42%; min-width: 100px; padding-top: 5px; direction: ltr; text-align: right; color: #34464d;
+            font-size: 11.5px; font-weight: 700; overflow-wrap: anywhere; }
+        .epf-flabel bdi::after { content: ":"; margin-inline-start: 1px; }
+        .epf-fwrap { flex: 1 1 0; min-width: 0; direction: rtl; }
+        .epf-field-control {
+            display: block; width: 100%; min-height: 30px; padding: 4px 6px; border: 1px solid #cbd3d6;
+            border-radius: 6px; color: var(--ink); background: #fff; font-size: 11.5px; line-height: 1.5; text-align: start;
+        }
+        .epf-field-control:disabled { color: #8b979c; background: #f1f3f4; }
+        select.epf-field-control { direction: ltr; text-align: left; }
+        textarea.epf-field-control { min-height: 40px; resize: vertical; white-space: pre-wrap; }
+        .epf-meta { margin-top: 2px; font-size: 11px; line-height: 1.4; color: var(--mut); }
+        .epf-field-status { display: block; min-height: 14px; }
+        .epf-field-cur { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5a6a70; }
+        [data-st="will-change"] .epf-field-status { color: var(--ok); font-weight: 700; }
+        [data-st="not-editable"] .epf-field-status { color: var(--warn); }
+        [data-st="invalid-select"] .epf-field-status { color: var(--bad); font-weight: 700; }
+        .epf-ct { margin-top: 4px; }
+        .epf-ct-btn {
+            display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 1px solid var(--acc);
+            border-radius: 6px; color: var(--acc); background: var(--pri); font-size: 11px; font-weight: 700; cursor: pointer;
+        }
+        .epf-ct-btn:hover:not(:disabled) { background: var(--pri-d); }
+        .epf-ct-btn:disabled { color: #8b979c; background: #d9dfe1; border-color: #c3cbce; cursor: not-allowed; }
+        .epf-ct-msg { margin-top: 3px; font-size: 10.5px; line-height: 1.5; }
+        .epf-ct-info { color: #7a5b00; }
+        .epf-ct-bad { color: var(--bad); }
+        .epf-ct-ok { color: var(--ok); font-weight: 700; }
+        .epf-footer { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 7px 12px 9px; border-top: 1px solid #e8edef; background: #fbfcfc; }
+        .epf-settings-footer { direction: ltr; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: center; }
+        .epf-settings-footer .epf-btn { min-height: 34px; padding: 6px 8px; }
+        .epf-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+        .epf-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 20px; background: #edf0f1; color: #536168; font-size: 10.5px; white-space: nowrap; }
+        .epf-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #9aa5aa; }
+        .epf-chip[data-k="will-change"]::before { background: var(--ok); }
+        .epf-chip[data-k="invalid-select"]::before { background: var(--bad); }
+        .epf-chip[data-k="not-editable"]::before { background: #d2a500; }
+        .epf-chip-count { margin-inline-start: 2px; font-size: 13.5px; line-height: 1; font-weight: 800; color: inherit; }
+        .epf-only { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #45545a; white-space: nowrap; }
+        .epf-only input { accent-color: var(--pri); }
+        .epf-footer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+        #epf-toast {
+            position: fixed; left: 24px; bottom: 20px; z-index: 10002; max-width: min(92vw, 540px); padding: 11px 15px;
+            border-radius: 9px; color: #fff; background: var(--pri); box-shadow: 0 6px 22px rgba(0,0,0,.2);
+            font-size: 12px; line-height: 1.75; direction: rtl; cursor: pointer; opacity: 0; transform: translateY(8px);
+            pointer-events: none; transition: .2s ease;
+        }
+        #epf-toast.epf-toast-show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+        .epf-filled { background-color: #e8f5e9 !important; border-color: #28a745 !important; }
+        .epf-settings { flex: 1 1 auto; min-height: 0; overflow: auto; }
+        .epf-settings-intro { margin: 0 0 8px; font-size: 11.5px; line-height: 1.75; color: #44545a; text-align: right; }
+        .epf-settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 8px; direction: ltr; align-items: stretch; }
+        .epf-settings-actions { display: flex; flex-direction: column; gap: 6px; }
+        .epf-settings-actions .epf-btn { min-height: 34px; padding: 5px 7px; font-size: 11px; }
+        .epf-settings-area { display: block; width: 100%; min-height: 60px; max-height: 130px; resize: vertical; padding: 7px 9px;
+            border: 1px solid #cbd3d6; border-radius: 7px; background: #fbfcfc; color: var(--ink); font-size: 11.5px;
+            line-height: 1.55; direction: ltr; text-align: left; white-space: pre; }
+        .epf-hlegend { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 18px; margin: 9px 0 0; font-size: 11px; line-height: 1.65; color: var(--mut); }
+        .epf-hlegend span { font-weight: 700; }
+        .epf-hlegend .lg-miss { color: var(--bad); }
+        .epf-hlegend .lg-dup { color: #b8860b; }
+        .epf-hlegend .lg-chg { color: var(--ok); }
+        .epf-hlegend .lg-def { color: #8a959b; }
+        .epf-hgrid { direction: ltr; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; margin-top: 6px;
+            padding: 7px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfc; }
+        .epf-hcell { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; padding: 4px 6px;
+            border: 1px solid #e7eced; border-radius: 5px; background: #fff; font-size: 11px; }
+        .epf-hname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+        .epf-hcol { flex: 0 0 auto; min-width: 14px; text-align: center; font-weight: 700; color: #98a3a8; }
+        .epf-hname.epf-h-missing, .epf-hcol.epf-h-missing { color: var(--bad); }
+        .epf-hname.epf-h-dup, .epf-hcol.epf-h-dup { color: #b8860b; }
+        .epf-hcol.epf-h-changed { color: var(--ok); }
+        .epf-box { display: none; margin-top: 8px; padding: 7px 9px; border-radius: 7px; font-size: 11px; line-height: 1.75; white-space: pre-wrap; }
+        .epf-box.epf-show { display: block; }
+        .epf-box-err { color: #842029; background: #f8d7da; }
+        .epf-box-warn { color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
+        .epf-box-info { color: #174b58; background: #e8f1f3; }
+        .epf-box-ok { color: #155724; background: #d4edda; }
+        #epf-confirm-overlay { position: fixed; inset: 0; z-index: 10005; display: none; align-items: center; justify-content: center;
+            padding: 16px; background: rgba(30,25,21,.45); }
+        #epf-confirm-overlay.epf-open { display: flex; }
+        .epf-confirm-box { width: min(92vw, 420px); padding: 16px 18px; background: #fff; color: var(--ink); border-radius: 10px;
+            box-shadow: 0 14px 44px rgba(0,0,0,.3); }
+        .epf-confirm-msg { margin: 0 0 14px; font-size: 12px; line-height: 1.85; }
+        .epf-confirm-actions { display: flex; justify-content: center; gap: 10px; }
+        .epf-confirm-actions .epf-btn { min-width: 130px; }
+        @media (max-width: 768px) {
+            #epf-modal { width: 98vw; height: 95vh; max-height: 95vh; }
+            .epf-header { padding: 8px 10px; }
+            .epf-content { padding: 8px; }
+            .epf-mrow { flex-wrap: wrap; }
+            .epf-fcell { flex: 1 1 100% !important; }
+            .epf-flabel { max-width: 100%; flex: 0 0 auto; }
+            .epf-settings-footer { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .epf-footer { padding: 6px 8px; }
+            .epf-hgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .epf-settings-layout { grid-template-columns: minmax(0, 1fr) 112px; }
+            .epf-identity { max-width: 180px; font-size: 11px; }
+        }
+        @media (max-width: 420px) {
+            .epf-title { font-size: 13.5px; }
+            .epf-subtitle { font-size: 10px; }
+            .epf-paste-layout { grid-template-columns: minmax(0, 1fr) 110px; }
+            #epf-paste-area { min-height: 44px; }
+            .epf-chip { font-size: 9.5px; padding: 2px 5px; }
+            .epf-chip-count { font-size: 12.5px; }
+        }
+        @media (prefers-reduced-motion: reduce) { #epf-modal, #epf-fab, #epf-toast, .epf-fcell { animation: none; transition: none; } }
+    `;
+
+    // ============================================================
+    // 05. MODAL UI
+    // ============================================================
+    const root = makeElement('div');
+    root.id = 'epf-root';
+
+    const fab = makeElement('button');
+    fab.id = 'epf-fab';
+    fab.type = 'button';
+    fab.setAttribute('aria-haspopup', 'dialog');
+    fab.setAttribute('aria-controls', 'epf-modal');
+    const fabIcon = makeElement('span', 'epf-fab-icon', '▤');
+    fabIcon.setAttribute('aria-hidden', 'true');
+    fab.append(fabIcon, makeElement('span', '', 'انتقال از Excel'));
+
+    const overlay = makeElement('div');
+    overlay.id = 'epf-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+
+    const modal = makeElement('section');
+    modal.id = 'epf-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'epf-title');
+
+    const header = makeElement('div', 'epf-header');
+    const headerTop = makeElement('div', 'epf-header-top');
+    const title = makeElement('h2', 'epf-title', 'انتقال اطلاعات Excel به فرم BTS Property');
+    title.id = 'epf-title';
+    const gearBtn = makeElement('button', 'epf-gear');
+    gearBtn.type = 'button';
+    gearBtn.setAttribute('aria-label', 'تنظیمات نگاشت هدر');
+    const gearState = makeElement('span', 'epf-gear-state', 'پیشفرض');
+    gearBtn.append(makeElement('span', 'epf-gear-main', '⚙ تنظیمات نگاشت هدر'), gearState);
+
+    const headerIdentity = makeElement('span', 'epf-identity', '— —');
+    headerIdentity.id = 'epf-identity';
+    headerIdentity.setAttribute('role', 'status');
+
+    const closeMainBtn = makeElement('button', 'epf-xbtn', '✕');
+    closeMainBtn.id = 'epf-x-main';
+    closeMainBtn.type = 'button';
+    closeMainBtn.setAttribute('aria-label', 'بستن پنجره');
+    const closeSettingsBtn = makeElement('button', 'epf-xbtn', '✕');
+    closeSettingsBtn.id = 'epf-x-settings';
+    closeSettingsBtn.type = 'button';
+    closeSettingsBtn.setAttribute('aria-label', 'بستن تنظیمات');
+    closeSettingsBtn.hidden = true;
+
+    const headerMain = makeElement('div');
+    const subtitle = makeElement('p', 'epf-subtitle',
+        'یک ردیف از اکسل را در کادر زیر پیست کنید. پس از بررسی، فیلدهای موردنظر را اعمال کنید. در صورت تغییر فیلدهای مؤثر در محاسبات، Calculate به‌صورت خودکار اجرا می‌شود.');
+    const mapNote = makeElement('div');
+    mapNote.id = 'epf-map-note';
+    mapNote.setAttribute('role', 'status');
+
+    const pasteLayout = makeElement('div', 'epf-paste-layout');
+    const pasteArea = makeElement('textarea');
+    pasteArea.id = 'epf-paste-area';
+    pasteArea.placeholder = 'ردیف داده را اینجا پیست کنید یا از دکمه «پیست» استفاده کنید...';
+    pasteArea.spellcheck = false;
+    pasteArea.setAttribute('aria-label', 'ردیف داده اکسل');
+    const pasteActions = makeElement('div', 'epf-paste-actions');
+    const pasteButton = makeElement('button', 'epf-btn epf-btn-secondary', 'پیست');
+    pasteButton.type = 'button';
+    const reviewButton = makeElement('button', 'epf-btn epf-btn-primary', 'بررسی');
+    reviewButton.type = 'button';
+    pasteActions.append(pasteButton, reviewButton);
+    pasteLayout.append(pasteArea, pasteActions);
+
+    const pasteWarning = makeElement('div');
+    pasteWarning.id = 'epf-paste-warning';
+    pasteWarning.setAttribute('role', 'status');
+    pasteWarning.setAttribute('aria-live', 'polite');
+    headerMain.append(subtitle, mapNote, pasteLayout, pasteWarning);
+    const titleWrap = makeElement('div', 'epf-title-wrap');
+    titleWrap.append(closeMainBtn, closeSettingsBtn, title);
+    headerTop.append(titleWrap, headerIdentity, gearBtn);
+    header.append(headerTop, headerMain);
+
+    const content = makeElement('div', 'epf-content');
+    const mainMessage = makeElement('div');
+    mainMessage.id = 'epf-main-message';
+    mainMessage.setAttribute('role', 'status');
+    mainMessage.setAttribute('aria-live', 'polite');
+    const fieldsContainer = makeElement('div');
+    fieldsContainer.id = 'epf-fields';
+    content.append(mainMessage, fieldsContainer);
+
+    const footer = makeElement('div', 'epf-footer');
+    const chipsBox = makeElement('div', 'epf-chips');
+    const CHIP_DEFS = [
+        { key: 'will-change', label: 'تغییر' },
+        { key: 'same', label: 'یکسان' },
+        { key: 'invalid-select', label: 'نامعتبر' },
+        { key: 'not-editable', label: 'غیرقابل ویرایش' }
+    ];
+    const chips = CHIP_DEFS.map(def => {
+        const el = makeElement('span', 'epf-chip');
+        el.dataset.k = def.key;
+        el.append(makeElement('span', '', def.label), makeElement('strong', 'epf-chip-count', '0'));
+        chipsBox.appendChild(el);
+        return { key: def.key, label: def.label, el, count: el.querySelector('.epf-chip-count') };
+    });
+    const onlyLabel = makeElement('label', 'epf-only');
+    const onlyBox = makeElement('input');
+    onlyBox.type = 'checkbox';
+    onlyLabel.append(onlyBox, document.createTextNode('فقط تغییرات'));
+    const footerActions = makeElement('div', 'epf-footer-actions');
+    const applyButton = makeElement('button', 'epf-btn epf-btn-apply', 'اعمال در فرم وب');
+    applyButton.type = 'button';
+    applyButton.disabled = true;
+    const cancelButton = makeElement('button', 'epf-btn epf-btn-secondary', 'انصراف');
+    cancelButton.type = 'button';
+    footerActions.append(chipsBox, onlyLabel, applyButton, cancelButton);
+    footer.append(footerActions);
+
+    const settingsView = makeElement('div', 'epf-content epf-settings');
+    settingsView.hidden = true;
+    const settingsFooter = makeElement('div', 'epf-footer epf-settings-footer');
+    settingsFooter.hidden = true;
+    modal.append(header, content, settingsView, footer, settingsFooter);
+    overlay.appendChild(modal);
+    root.append(fab, overlay);
+
+    const toast = makeElement('div');
+    toast.id = 'epf-toast';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    root.appendChild(toast);
+
+    const confirmOverlay = makeElement('div');
+    confirmOverlay.id = 'epf-confirm-overlay';
+    confirmOverlay.setAttribute('aria-hidden', 'true');
+    const confirmBox = makeElement('div', 'epf-confirm-box');
+    confirmBox.setAttribute('role', 'alertdialog');
+    confirmBox.setAttribute('aria-modal', 'true');
+    const confirmMsg = makeElement('p', 'epf-confirm-msg');
+    const confirmOkBtn = makeElement('button', 'epf-btn epf-btn-primary', 'برگشت بدون ذخیره');
+    confirmOkBtn.type = 'button';
+    const confirmStayBtn = makeElement('button', 'epf-btn epf-btn-secondary', 'ماندن در تنظیمات');
+    confirmStayBtn.type = 'button';
+    const confirmActions = makeElement('div', 'epf-confirm-actions');
+    confirmActions.append(confirmOkBtn, confirmStayBtn);
+    confirmBox.append(confirmMsg, confirmActions);
+    confirmOverlay.appendChild(confirmBox);
+    root.appendChild(confirmOverlay);
+
+    // ============================================================
+    // 06. FIELD REVIEW CONTROLS
+    // ============================================================
+
+    function isMapped(key) {
+        return Boolean(activeHeaderMapping && Number.isInteger(activeHeaderMapping.columns[key]));
+    }
+
+    function isCancellationDateEnabled() {
+        if (String(getVal('cancellationLetter')).trim().toUpperCase() === 'YES') return true;
+        const info = targetInfo(FIELD_BY_KEY.cancellationLetter);
+        return Boolean(info.exists && info.typeMatches &&
+            String(info.element.value || '').trim().toUpperCase() === 'YES');
+    }
+
+    /** Creates the field review controls once per page session. */
+    function buildRows() {
+        if (built) return;
+        built = true;
+        const fragment = document.createDocumentFragment();
+
+        MODAL_ROWS.forEach(section => {
+            const group = GROUPS.find(item => item.id === section.id);
+            const box = makeElement('section', 'epf-section');
+            box.appendChild(makeElement('div', 'epf-section-title', group ? group.title : ''));
+            groupEls.push({ el: box, id: section.id });
+
+            section.rows.forEach(rowDef => {
+                const rowEl = makeElement('div', 'epf-mrow' + (rowDef.facing ? ' epf-facing' : ''));
+                rowDef.fields.forEach(key => {
+                    const field = FIELD_BY_KEY[key];
+                    const cell = makeElement('div', 'epf-fcell' + (field.type === 'textarea' ? ' epf-fwcell' : ''));
+                    cell.dataset.key = key;
+                    cell.dataset.st = 'idle';
+
+                    const label = makeElement('label', 'epf-flabel');
+                    const name = makeElement('bdi', '', field.label);
+                    name.dir = 'ltr';
+                    label.appendChild(name);
+
+                    const wrap = makeElement('div', 'epf-fwrap');
+                    const controlType = field.type === 'select' ? 'select'
+                        : field.type === 'textarea' ? 'textarea' : 'input';
+                    const control = makeElement(controlType, 'epf-field-control');
+                    control.id = `epf-control-${key}`;
+                    control.dataset.key = key;
+                    if (controlType === 'input') {
+                        control.type = 'text';
+                        control.dir = 'auto';
+                        control.autocomplete = 'off';
+                        control.spellcheck = false;
+                    } else if (controlType === 'textarea') {
+                        control.rows = 2;
+                        control.dir = 'auto';
+                        control.spellcheck = false;
+                    }
+                    label.htmlFor = control.id;
+
+                    const meta = makeElement('div', 'epf-meta');
+                    const status = makeElement('span', 'epf-field-status', 'پس از بررسی نمایش داده می‌شود');
+                    const current = makeElement('span', 'epf-field-cur');
+                    current.hidden = true;
+                    const currentValue = makeElement('bdi');
+                    currentValue.dir = 'auto';
+                    current.append(document.createTextNode('فعلی در وب: '), currentValue);
+                    meta.append(status, current);
+                    wrap.append(control, meta);
+                    if (key === FIELD_KEYS.CONTRACT_TYPE) wrap.appendChild(buildContractBox());
+                    cell.append(label, wrap);
+                    rowEl.appendChild(cell);
+
+                    controls[key] = control;
+                    rows[key] = { row: cell, status, cur: current, curVal: currentValue };
+                    control.addEventListener(field.type === 'select' ? 'change' : 'input', () => {
+                        state.webValues[key] = control.value;
+                        refreshAll();
+                    });
+                });
+                box.appendChild(rowEl);
+                modalRowEls.push({ el: rowEl, keys: rowDef.fields });
+            });
+            fragment.appendChild(box);
+        });
+
+        fieldsContainer.appendChild(fragment);
+        WEB_FIELDS.forEach(field => syncControl(field.key));
+    }
+
+    function syncControl(key) {
+        const control = controls[key];
+        if (!control) return;
+        const field = FIELD_BY_KEY[key];
+        const value = getVal(key);
+        if (!state.parsed || !isMapped(key)) {
+            control.disabled = true;
+            if (field.type === 'select') {
+                control.textContent = '';
+                const option = makeElement('option', '', state.parsed ? '(هدر ثبت نشده)' : '(پس از بررسی)');
+                option.value = '';
+                control.appendChild(option);
+            } else control.value = '';
+            return;
+        }
+
+        if (field.type !== 'select') {
+            control.value = field.type === 'textarea' ? value : String(value).replace(/\r?\n/g, ' ');
+            control.disabled = key === 'cancellationDate' && !isCancellationDateEnabled();
+            return;
+        }
+
+        const info = targetInfo(field);
+        const match = info.exists && info.typeMatches ? findSelectableOption(info.element, value) : null;
+        control.textContent = '';
+        if (!match) {
+            const extra = makeElement('option', '', value === '' ? '(خالی)' : '⚠ ' + value);
+            extra.value = value;
+            extra.selected = true;
+            control.appendChild(extra);
+        }
+        if (info.exists && info.typeMatches) {
+            Array.from(info.element.options).forEach(option => {
+                const item = makeElement('option', '', String(option.textContent || '').trim());
+                item.value = option.value;
+                item.disabled = option.disabled;
+                if (match === option) item.selected = true;
+                control.appendChild(item);
+            });
+        }
+        control.disabled = false;
+    }
+
+    function syncAllSelects() {
+        WEB_FIELDS.forEach(field => {
+            if (field.type === 'select') syncControl(field.key);
+        });
+        syncControl('cancellationDate');
+    }
+
+    // ============================================================
+    // 07. FIELD STATUS & COMPARISON
+    // ============================================================
+    function showMainMessage(message, kind) {
+        mainMessage.textContent = message || '';
+        const className = kind === 'error' ? 'epf-msg-error'
+            : kind === 'success' ? 'epf-msg-success'
+            : kind === 'warning' ? 'epf-msg-warning' : 'epf-msg-info';
+        mainMessage.className = 'epf-show ' + className;
+    }
+
+    function clearMainMessage() {
+        mainMessage.textContent = '';
+        mainMessage.className = '';
+    }
+
+    function setRowStatus(key, statusType, message, currentText) {
+        const item = rows[key];
+        if (!item) return;
+        item.row.dataset.st = statusType;
+        item.status.textContent = message || '';
+        if (currentText === undefined || currentText === null) {
+            item.cur.hidden = true;
+        } else {
+            item.curVal.textContent = currentText === '' ? '(خالی)' : currentText;
+            item.cur.title = currentText;
+            item.cur.hidden = false;
+        }
+    }
+
+    function updateChips(counts) {
+        chips.forEach(chip => {
+            chip.count.textContent = state.parsed && counts ? String(counts[chip.key] || 0) : '0';
+        });
+    }
+
+    function updateGroups() {
+        const onlyChanges = onlyBox.checked;
+        fieldsContainer.classList.toggle('epf-only-changes', onlyChanges);
+        const isChanging = key => rows[key] && rows[key].row.dataset.st === 'will-change';
+        modalRowEls.forEach(item => {
+            item.el.hidden = onlyChanges && !item.keys.some(isChanging);
+        });
+        groupEls.forEach(group => {
+            const hasChanges = WEB_FIELDS.some(field => field.group === group.id && isChanging(field.key));
+            group.el.hidden = onlyChanges && !hasChanges;
+        });
+    }
+
+    /** Compares a reviewed value with the live form and assigns its status. */
+    function evaluateField(key) {
+        const field = FIELD_BY_KEY[key];
+        if (!isMapped(key)) {
+            setRowStatus(key, 'not-editable', 'هدر این فیلد ثبت نشده است');
+            return 'not-editable';
+        }
+
+        const pasted = getVal(key);
+        if (String(pasted) === '') {
+            setRowStatus(key, 'same', 'مقدار خالی است و تغییری اعمال نمی‌شود');
+            return 'same';
+        }
+
+        const info = targetInfo(field);
+
+        if (key === 'cancellationDate') {
+            if (!isCancellationDateEnabled()) {
+                setRowStatus(key, 'not-editable', 'فقط در صورت Yes بودن Cancellation Letter قابل اعمال است');
+                return 'not-editable';
+            }
+        } else {
+            if (!info.exists || !info.typeMatches) {
+                setRowStatus(key, 'not-editable', 'فیلد در فرم پیدا نشد یا نوع آن سازگار نیست');
+                return 'not-editable';
+            }
+            if (!info.editable) {
+                setRowStatus(key, 'not-editable', 'این فیلد در فرم قابل ویرایش نیست');
+                return 'not-editable';
+            }
+        }
+
+        let option = null;
+        if (field.type === 'select') {
+            option = findSelectableOption(info.element, pasted);
+            if (!option) {
+                if (String(pasted) === '') {
+                    setRowStatus(key, 'same', 'مقدار خالی است و تغییری اعمال نمی‌شود');
+                    return 'same';
+                }
+                setRowStatus(key, 'invalid-select', 'مقدار در گزینه‌های سایت وجود ندارد؛ اعمال نمی‌شود');
+                return 'invalid-select';
+            }
+        }
+
+        const current = getCurrentFormValue(field);
+        let same;
+        if (field.type === 'select') same = String(info.element.value) === String(option.value);
+        else if (key === FIELD_KEYS.AMOUNT) same = stripCommas(pasted) === stripCommas(current);
+        else same = looseText(pasted) === looseText(current);
+
+        if (same) {
+            setRowStatus(key, 'same', 'این داده با فرم موجود یکسان است');
+            return 'same';
+        }
+        setRowStatus(key, 'will-change', 'این داده در فرم تغییر خواهد کرد', current);
+        return 'will-change';
+    }
+
+    /** Prevents applying a row to a different site or contract. */
+    function validateIdentity() {
+        const siteInfo = targetInfo(FIELD_BY_KEY[FIELD_KEYS.SITE_ID]);
+        const contractInfo = targetInfo(FIELD_BY_KEY[FIELD_KEYS.CONTRACT_TYPE]);
+        const result = { ok: false, siteOk: false, contractOk: false, message: '' };
+
+        if (!state.parsed) {
+            result.message = 'ابتدا یک ردیف معتبر وارد کرده و بررسی کنید.';
+            return result;
+        }
+        if (!state.searchConfirmed) {
+            result.message = 'جستجوی Site ID هنوز تأیید نشده است؛ اطلاعات تا تکمیل جستجو قابل اعمال نیست.';
+            return result;
+        }
+
+        if (!siteInfo.exists || !siteInfo.typeMatches || !contractInfo.exists || !contractInfo.typeMatches) {
+            result.message = 'فیلد Site ID یا Contract Type در صفحه پیدا نشد.';
+            return result;
+        }
+
+        const pastedSite = normalize(getVal(FIELD_KEYS.SITE_ID));
+        const pageSite = normalize(siteInfo.element.value);
+        const pastedContract = normalize(getVal(FIELD_KEYS.CONTRACT_TYPE));
+        const pageContract = normalize(selectedOptionText(contractInfo.element));
+
+        result.siteOk = Boolean(pastedSite && pageSite && pastedSite === pageSite);
+        result.contractOk = Boolean(pastedContract && pageContract && pastedContract === pageContract);
+        result.ok = result.siteOk && result.contractOk;
+
+        if (result.ok) {
+            result.message = 'Site ID و Contract Type با فرم فعلی مطابقت دارند.';
+        } else {
+            const details = [];
+            if (!result.siteOk) details.push('Site ID منطبق نیست یا خالی است');
+            if (!result.contractOk) details.push('Contract Type منطبق نیست یا خالی است');
+            result.message = 'Site ID یا Contract Type مطابقت ندارد: ' + details.join('؛ ');
+        }
+        return result;
+    }
+
+    /** True when the reviewed Contract Type differs from the live form (invalid dropdowns may belong to the other contract). */
+    function contractDiffersFromForm() {
+        const info = targetInfo(FIELD_BY_KEY[FIELD_KEYS.CONTRACT_TYPE]);
+        if (!info.exists || !info.typeMatches) return false;
+        const pasted = normalize(getVal(FIELD_KEYS.CONTRACT_TYPE));
+        return Boolean(pasted) && pasted !== normalize(selectedOptionText(info.element));
+    }
+
+    function refreshAll() {
+        if (!built) return;
+        syncControl('cancellationDate');
+        if (!state.parsed) {
+            updateChips(null);
+            updateGroups();
+            applyButton.disabled = true;
+            return;
+        }
+
+        const counts = { 'will-change': 0, 'same': 0, 'not-editable': 0, 'invalid-select': 0 };
+        WEB_FIELDS.forEach(field => { counts[evaluateField(field.key)] += 1; });
+        updateChips(counts);
+        updateGroups();
+
+        const identity = validateIdentity();
+        applyButton.disabled = !identity.ok || state.searching || state.calculating;
+
+        if (state.searching || state.calculating) return;
+        const invalidFields = WEB_FIELDS.filter(field => rows[field.key].row.dataset.st === 'invalid-select');
+        let message = identity.message;
+        let kind = identity.ok ? 'success' : 'error';
+        if (invalidFields.length) {
+            const labels = invalidFields.map(field => field.label).join('، ');
+            if (contractDiffersFromForm()) {
+                message += '\n' + faNum(invalidFields.length) + ' مقدار Dropdown فعلاً با گزینه‌های سایت تطبیق ندارد: ' + labels +
+                    '. چون نوع قرارداد داده با فرم فرق دارد، ابتدا «اعمال Contract جدید» را بزنید؛ ' +
+                    'اگر بعد از اعمال هم نامعتبر ماند، مشکل واقعی ستون‌هاست.';
+                kind = 'info';
+            } else if (invalidFields.length > 1) {
+                message += '\nچند مقدار Dropdown با گزینه‌های سایت تطبیق ندارد: ' + labels +
+                    '. احتمال جابه‌جایی ستون‌ها وجود دارد؛ هدر ثبت‌شده و ردیف اکسل را بررسی کنید.';
+                kind = 'error';
+            } else {
+                message += '\nمقدار Dropdown این فیلد در گزینه‌های سایت وجود ندارد: ' + labels +
+                    '. ستون متناظر را بررسی کنید.';
+                kind = 'warning';
+            }
+        }
+        showMainMessage(message, kind);
+    }
+
+    // ============================================================
+    // 08. SITE ID SEARCH
+    // ============================================================
+    function getLLNameValue() {
+        const element = document.getElementById(LL_NAME_ID);
+        return element ? String(element.value || '').trim() : '';
+    }
+
+    function waitForLLName(maxMs, intervalMs, previousValue, requireChange = false) {
+        return new Promise(resolve => {
+            const start = Date.now();
+            const check = () => {
+                if (state.cancelRequested) { resolve(false); return; }
+                const current = getLLNameValue();
+                if (current && (!requireChange || current !== previousValue)) { resolve(true); return; }
+                if (Date.now() - start >= maxMs) { resolve(false); return; }
+                setTimeout(check, intervalMs);
+            };
+            check();
+        });
+    }
+
+    /** True when the page answered with the new-site form instead of site data. */
+    function siteIdMissing() {
+        return Boolean(document.getElementById(SITE_INSERT_INPUT_ID));
+    }
+
+    /** Searches the site and separates found / missing / timeout outcomes. */
+    async function performAutoSearch(siteId) {
+        const siteInput = document.getElementById(SITE_ID_INPUT_ID);
+        const searchButton = document.getElementById(SEARCH_BTN_ID);
+        if (!siteInput || !searchButton) {
+            return { ok: false, reason: 'فیلد Site ID یا دکمه جستجو در صفحه پیدا نشد.', kind: 'error' };
+        }
+
+        const previousLLName = getLLNameValue();
+        siteInput.value = siteId;
+        siteInput.dispatchEvent(new Event('input', { bubbles: true }));
+        siteInput.dispatchEvent(new Event('change', { bubbles: true }));
+        showMainMessage('در حال جستجوی Site ID...', 'info');
+
+        const slowTimer = setTimeout(() => {
+            showMainMessage('جستجو همچنان در حال اجرا است؛ چند لحظه صبر کنید.', 'info');
+        }, 4000);
+
+        state.cancelRequested = false;
+        const result = await runAndWait(() => searchButton.click(), 2000, 15000, null, { abortOnCancel: true });
+        clearTimeout(slowTimer);
+
+        const cancelledResult = { ok: false, kind: 'warning',
+            reason: 'انتظار جستجو را لغو کردید؛ وضعیت فرم را بررسی کنید و برای ادامه دوباره «بررسی» را بزنید.' };
+        if (result.cancelled || state.cancelRequested) return cancelledResult;
+
+        if (result.error) {
+            return { ok: false, reason: 'هنگام جستجوی Site ID خطا رخ داد. وضعیت صفحه را بررسی کنید.', kind: 'error' };
+        }
+        if (result.timeout) {
+            return { ok: false, reason: 'عملیات جستجو در زمان مورد انتظار تکمیل نشد؛ احتمال اختلال ارتباط یا پایان نشست کاربری وجود دارد.', kind: 'warning' };
+        }
+        if (siteIdMissing()) {
+            return { ok: false, reason: 'این Site ID در سامانه ثبت نشده است؛ فرم ثبت سایت جدید نمایش داده شده است.', kind: 'error' };
+        }
+
+        const found = result.started === true
+            ? await waitForLLName(1500, 300)
+            : await waitForLLName(8000, 500, previousLLName, true);
+        if (state.cancelRequested) return cancelledResult;
+        if (!found) {
+            return { ok: false, reason: 'پاسخ جستجو دریافت شد اما LL Name پر نشد؛ وضعیت صفحه را بررسی کنید.', kind: 'error' };
+        }
+        return { ok: true, reason: '', kind: 'info' };
+    }
+
+    // ============================================================
+    // 09. CLIPBOARD & ROW REVIEW
+    // ============================================================
+    function updatePasteRevisionWarning() {
+        const changed = state.parsed && pasteArea.value !== state.reviewedText;
+        pasteWarning.textContent = changed
+            ? 'متن کادر پس از بررسی تغییر کرده است. نتیجه بررسی قبلی همچنان قابل اعمال است؛ برای استفاده از متن جدید، دوباره «بررسی» را بزنید.'
+            : '';
+        pasteWarning.classList.toggle('epf-show', changed);
+    }
+
+    function setBusy(busy) {
+        pasteButton.disabled = busy;
+        reviewButton.disabled = busy || !activeHeaderMapping;
+        pasteArea.disabled = busy;
+        gearBtn.disabled = busy;
+        if (ctBtn) ctBtn.disabled = busy;
+        cancelButton.textContent = busy ? 'لغو انتظار' : 'انصراف';
+        cancelButton.disabled = false;
+        applyButton.disabled = busy || !state.parsed || !validateIdentity().ok;
+    }
+
+    function resetParsedData() {
+        state.webValues = {};
+        state.parsed = false;
+        state.reviewedText = '';
+        state.searchConfirmed = false;
+        state.headerContract = '';
+        state.contractChangeCompleted = false;
+        if (contractFixTimer) { clearTimeout(contractFixTimer); contractFixTimer = null; }
+        updateHeaderIdentity();
+        WEB_FIELDS.forEach(field => {
+            syncControl(field.key);
+            setRowStatus(field.key, 'idle', 'پس از بررسی نمایش داده می‌شود');
+        });
+        applyButton.disabled = true;
+        resetContractFix();
+        updateChips(null);
+        updateGroups();
+        updatePasteRevisionWarning();
+    }
+
+    /** Extracts the required fields from the current paste-box snapshot. */
+    function processPastedText(raw) {
+        if (!activeHeaderMapping) {
+            return { ok: false, message: 'ابتدا هدر اکسل را در «تنظیمات نگاشت هدر» ثبت کنید.' };
+        }
+        const allRows = parseTSV(raw);
+        if (!allRows.length) return { ok: false, message: 'متنی برای بررسی وجود ندارد.' };
+
+        const cells = allRows[0];
+        const extraction = extractValues(cells, activeHeaderMapping);
+        if (!extraction.ok) return extraction;
+
+        const rowWarning = allRows.length > 1
+            ? `توجه: ${allRows.length} ردیف تشخیص داده شد؛ فقط ردیف اول بررسی شد. ` : '';
+        const lengths = allRows.map(row => row.length);
+        const colWarning = allRows.length > 1 && lengths.some(n => n !== lengths[0])
+            ? 'توجه: ردیف‌های پیست‌شده تعداد ستون یکسان ندارند؛ جای ستون‌ها را بررسی کنید.' : '';
+        return { ok: true, webValues: extraction.webValues, rowWarning, colWarning };
+    }
+
+    /** Copies clipboard text into the input box without reviewing it. */
+    async function pasteFromClipboard() {
+        if (state.searching || state.calculating) return;
+        if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
+            showMainMessage('خواندن مستقیم Clipboard در این مرورگر در دسترس نیست. متن را با Ctrl+V داخل کادر پیست کنید.', 'warning');
+            return;
+        }
+        try {
+            const text = await navigator.clipboard.readText();
+            if (!text) {
+                showMainMessage('متن Clipboard خالی است.', 'warning');
+                return;
+            }
+            pasteArea.value = text;
+            updatePasteRevisionWarning();
+            showMainMessage('متن Clipboard داخل کادر قرار گرفت؛ برای بررسی، دکمه «بررسی» را بزنید.', 'info');
+        } catch (error) {
+            showMainMessage('مرورگر اجازه خواندن Clipboard را نداد. متن را با Ctrl+V داخل کادر پیست کنید.', 'warning');
+        }
+    }
+
+    /** Reviews only the text currently present in the paste box. */
+    async function reviewPastedRow() {
+        if (state.searching || state.calculating) return;
+        if (!activeHeaderMapping) {
+            showMainMessage('ابتدا هدر اکسل را در «تنظیمات نگاشت هدر» ثبت کنید.', 'error');
+            return;
+        }
+        const rawText = pasteArea.value;
+        if (!rawText.trim()) {
+            showMainMessage('کادر ورود اطلاعات خالی است. ابتدا یک ردیف از اکسل پیست کنید.', 'error');
+            return;
+        }
+
+        const result = processPastedText(rawText);
+        if (!result.ok) {
+            showMainMessage(result.message, 'error');
+            return;
+        }
+        if (result.colWarning) showToast(result.colWarning, 5000);
+
+        state.webValues = result.webValues;
+        state.parsed = true;
+        state.reviewedText = rawText;
+        state.searchConfirmed = false;
+        state.headerContract = String(getVal(FIELD_KEYS.CONTRACT_TYPE) || '').trim();
+        updateHeaderIdentity();
+        WEB_FIELDS.forEach(field => syncControl(field.key));
+        resetContractFix();
+        updatePasteRevisionWarning();
+        refreshAll();
+
+        state.searching = true;
+        setBusy(true);
+        const search = await performAutoSearch(String(getVal(FIELD_KEYS.SITE_ID)).trim());
+        state.searching = false;
+        setBusy(false);
+
+        if (!search.ok) {
+            state.searchConfirmed = false;
+            refreshAll();
+            showMainMessage(search.reason, search.kind);
+            return;
+        }
+
+        state.searchConfirmed = true;
+        syncAllSelects();
+        refreshAll();
+        renderContractFix();
+        if (result.rowWarning) {
+            const identity = validateIdentity();
+            showMainMessage(result.rowWarning + identity.message, identity.ok ? 'success' : 'error');
+        }
+    }
+
+    // ============================================================
+    // 10. APPLY CHANGES
+    // ============================================================
+    function dispatchFieldEvents(el) {
+        const opts = { bubbles: true };
+        el.dispatchEvent(new Event('input', opts));
+        el.dispatchEvent(new Event('change', opts));
+        el.dispatchEvent(new Event('blur', opts));
+    }
+
+    function applyOneField(field, value) {
+        const info = targetInfo(field);
+        const forceEditable = field.key === 'cancellationDate' && isCancellationDateEnabled();
+
+        if (!info.exists || !info.typeMatches || (!info.editable && !forceEditable)) {
+            return { applied: false, reason: 'not-editable' };
+        }
+
+        if (forceEditable && info.element && info.element.disabled) {
+            info.element.disabled = false;
+        }
+
+        if (field.type === 'select') {
+            const option = findSelectableOption(info.element, value);
+            if (!option) return { applied: false, reason: 'invalid-select' };
+            info.element.value = option.value;
+            if (info.element.options[info.element.selectedIndex] !== option) {
+                option.selected = true;
+            }
+        } else {
+            info.element.value = String(value);
+        }
+
+        info.element.classList.add('epf-filled');
+        return { applied: true, element: info.element, field };
+    }
+
+    function finishApply(changedCount, skippedInvalid, calcState, failedApply) {
+        closeModal(true);
+
+        let summary = `انتقال تمام شد: ${changedCount} فیلد تغییر کرد.`;
+        if (calcState === 'done') summary += ' محاسبه (Calculate) هم انجام شد.';
+        if (calcState === 'blocked') summary += ' Calculate اجرا نشد (درخواستی به سرور نرفت؛ احتمالاً اعتبارسنجی صفحه جلویش را گرفت) – آن را دستی بزنید.';
+        if (calcState === 'error') summary += ' Calculate با خطا روبه‌رو شد – آن را دستی بزنید.';
+        if (calcState === 'cancelled') summary += ' انتظار Calculate را لغو کردید؛ وضعیت Calculate را در فرم بررسی کنید و در صورت نیاز دستی بزنید.';
+        if (skippedInvalid.length) {
+            summary += ` فیلدهای نامعتبر select رد شدند: ${skippedInvalid.slice(0, 6).join('، ')}`;
+            if (skippedInvalid.length > 6) summary += ` و ${skippedInvalid.length - 6} مورد دیگر`;
+            summary += '.';
+        }
+        if (failedApply && failedApply.length) {
+            summary += ` فیلدهای دارای خطا: ${failedApply.slice(0, 6).join('، ')}`;
+            if (failedApply.length > 6) summary += ` و ${failedApply.length - 6} مورد دیگر`;
+            summary += '.';
+        }
+        summary += ' ذخیره‌سازی انجام نشده؛ دکمه Save صفحه را خودتان بزنید.';
+        showToast(summary);
+
+        pasteArea.value = '';
+        resetParsedData();
+        clearMainMessage();
+    }
+
+    /** Applies the last reviewed values and runs Calculate when required. */
+    async function applyAllFields() {
+        if (state.searching || state.calculating) return;
+        const identity = validateIdentity();
+        if (!identity.ok) {
+            applyButton.disabled = true;
+            showMainMessage(identity.message, 'error');
+            return;
+        }
+
+        let changedCount = 0;
+        const appliedItems = [];
+        const skippedInvalid = [];
+        const failedApply = [];
+        const greenCalcKeys = [];
+        let cancellationLetterPreApplied = false;
+
+        const cancellationField = FIELD_BY_KEY.cancellationLetter;
+        if (isCancellationDateEnabled() && evaluateField(cancellationField.key) === 'will-change') {
+            try {
+                const cancellationResult = applyOneField(cancellationField, getVal(cancellationField.key));
+                if (cancellationResult.applied) {
+                    dispatchFieldEvents(cancellationResult.element);
+                    cancellationResult.alreadyDispatched = true;
+                    appliedItems.push(cancellationResult);
+                    changedCount += 1;
+                    cancellationLetterPreApplied = true;
+                }
+            } catch (error) {
+                failedApply.push(cancellationField.label);
+            }
+            syncAllSelects();
+        }
+
+        WEB_FIELDS.forEach(field => {
+            if (field.key === 'cancellationLetter' && cancellationLetterPreApplied) return;
+            const status = evaluateField(field.key);
+            if (status === 'invalid-select') {
+                skippedInvalid.push(field.label);
+                return;
+            }
+            if (status !== 'will-change') return;
+
+            if (CALC_FIELD_KEYS.includes(field.key)) greenCalcKeys.push(field.key);
+            try {
+                const result = applyOneField(field, getVal(field.key));
+                if (result.applied) {
+                    changedCount += 1;
+                    appliedItems.push(result);
+                }
+            } catch (error) {
+                failedApply.push(field.label);
+            }
+        });
+
+        appliedItems.forEach(item => {
+            if (item.alreadyDispatched) return;
+            try {
+                if (item.element && item.element.isConnected) dispatchFieldEvents(item.element);
+            } catch (error) {
+                failedApply.push(item.field.label);
+            }
+        });
+
+        const shouldCalculate = greenCalcKeys.length > 0 && amountIsValid();
+        if (!shouldCalculate) {
+            finishApply(changedCount, skippedInvalid, 'none', failedApply);
+            return;
+        }
+
+        const notSatLabels = [];
+        greenCalcKeys.forEach(key => {
+            if (!fieldSat(FIELD_BY_KEY[key], getVal(key))) notSatLabels.push(FIELD_BY_KEY[key].label);
+        });
+        if (notSatLabels.length) {
+            showMainMessage('خطا: مقدار این فیلد(ها) در فرم ننشست و محاسبه انجام نشد: ' + notSatLabels.join('، '), 'error');
+            refreshAll();
+            return;
+        }
+
+        const calcBtn = document.getElementById(CALC_BTN_ID);
+        if (!calcBtn) {
+            showMainMessage('فیلدها اعمال شدند، اما دکمه Calculate در صفحه پیدا نشد؛ محاسبه خودکار انجام نشد.', 'error');
+            refreshAll();
+            return;
+        }
+
+        state.cancelRequested = false;
+        state.calculating = true;
+        applyButton.disabled = true;
+        setBusy(true);
+        showMainMessage('در حال محاسبه (Calculate)... این مرحله چیزی ذخیره نمی‌کند.', 'info');
+
+        runAndWait(() => calcBtn.click(), 1500, 10000, () => {
+            showMainMessage('Calculate هنوز تکمیل نشده است؛ ممکن است ارتباط با سامانه کند یا قطع شده باشد.', 'warning');
+        }).then(response => {
+            state.calculating = false;
+            setBusy(false);
+            let calcState = 'done';
+            if (response.cancelled) calcState = 'cancelled';
+            else if (response.started === false) calcState = response.error ? 'error' : 'blocked';
+            else if (response.error || response.timeout) calcState = 'error';
+            finishApply(changedCount, skippedInvalid, calcState, failedApply);
+        });
+    }
+
+    // ============================================================
+    // 11. CONTRACT & ESCALATION HANDLING
+    // ============================================================
+
+    function buildContractBox() {
+        ctBox = makeElement('div', 'epf-ct');
+        ctBox.hidden = true;
+        ctBtn = makeElement('button', 'epf-ct-btn');
+        ctBtn.type = 'button';
+        const icon = makeElement('span', '', '↻');
+        icon.setAttribute('aria-hidden', 'true');
+        ctBtn.append(icon, document.createTextNode('اعمال Contract جدید'));
+        ctMsg = makeElement('div', 'epf-ct-msg');
+        ctMsg.setAttribute('role', 'status');
+        ctBtn.addEventListener('click', applyContractChange);
+        ctBox.append(ctBtn, ctMsg);
+        return ctBox;
+    }
+
+    function setCtMsg(text, kind) {
+        if (!ctMsg) return;
+        ctMsg.textContent = text || '';
+        ctMsg.className = 'epf-ct-msg' + (kind ? ' epf-ct-' + kind : '');
+    }
+
+    function resetContractFix() {
+        if (!ctBox) return;
+        ctBox.hidden = true;
+        ctBtn.hidden = false;
+        ctBtn.disabled = false;
+        setCtMsg('');
+    }
+
+    function renderContractFix() {
+        if (!ctBox) return;
+        if (state.contractChangeCompleted) {
+            ctBox.hidden = true;
+            return;
+        }
+        resetContractFix();
+        if (!state.parsed) return;
+        const siteInfo = targetInfo(FIELD_BY_KEY[FIELD_KEYS.SITE_ID]);
+        const ctInfo = targetInfo(FIELD_BY_KEY[FIELD_KEYS.CONTRACT_TYPE]);
+        if (!siteInfo.exists || !siteInfo.typeMatches || !ctInfo.exists || !ctInfo.typeMatches) return;
+
+        const pastedSite = normalize(getVal(FIELD_KEYS.SITE_ID));
+        if (!pastedSite || pastedSite !== normalize(siteInfo.element.value)) return;
+        const pastedCt = getVal(FIELD_KEYS.CONTRACT_TYPE);
+        if (normalize(pastedCt) === '') return;
+        if (normalize(pastedCt) === normalize(selectedOptionText(ctInfo.element))) return;
+
+        ctBox.hidden = false;
+        const opt = findOptionByText(ctInfo.element, pastedCt);
+        if (!opt) {
+            ctBtn.disabled = true;
+            setCtMsg('در لیست نیست', 'bad');
+            return;
+        }
+        if (DATE_OPTIONAL_TYPES.indexOf(String(opt.textContent).trim().toUpperCase()) !== -1) {
+            setCtMsg('با این تغییر، تاریخ‌ها غیرفعال و پاک می‌شوند', 'info');
+        }
+    }
+
+    /** Applies the pasted Contract Type; the page handles it locally without a postback. */
+    async function applyContractChange() {
+        const info = targetInfo(FIELD_BY_KEY[FIELD_KEYS.CONTRACT_TYPE]);
+        if (!info.exists || !info.typeMatches) return;
+        const opt = findOptionByText(info.element, getVal(FIELD_KEYS.CONTRACT_TYPE));
+        if (!opt) {
+            ctBtn.disabled = true;
+            setCtMsg('در لیست نیست', 'bad');
+            return;
+        }
+        if (!info.editable) {
+            setCtMsg('این فیلد در فرم قابل ویرایش نیست', 'bad');
+            return;
+        }
+        const el = info.element;
+        try {
+            el.value = opt.value;
+            if (el.options[el.selectedIndex] !== opt) opt.selected = true;
+            el.classList.add('epf-filled');
+            dispatchFieldEvents(el);
+        } catch (error) {
+            setCtMsg('تغییر نوع قرارداد در سامانه تأیید نشد. وضعیت صفحه را بررسی کنید و در صورت نیاز دوباره تلاش کنید.', 'bad');
+            return;
+        }
+
+        ctBtn.hidden = true;
+        setCtMsg('نوع قرارداد تغییر کرد ✓', 'ok');
+        markContractChanged(String(opt.textContent || '').trim());
+        syncAllSelects();
+        refreshAll();
+        await seatEscalationTypeAfterContract();
+    }
+
+    /** Flags a completed contract change and refreshes the modal identity line. */
+    function markContractChanged(contractText) {
+        state.contractChangeCompleted = true;
+        state.headerContract = contractText || '';
+        updateHeaderIdentity();
+        if (contractFixTimer) clearTimeout(contractFixTimer);
+        contractFixTimer = setTimeout(() => {
+            state.contractChangeCompleted = false;
+            contractFixTimer = null;
+        }, 8000);
+    }
+
+    /** Sets Escalation Type after the Contract Type postback completes. */
+    async function seatEscalationTypeAfterContract() {
+        if (!state.parsed) return;
+        const pasted = getVal(FIELD_KEYS.ESCALATION_TYPE);
+        if (normalize(pasted) === '') return;
+
+        const field = FIELD_BY_KEY[FIELD_KEYS.ESCALATION_TYPE];
+        const info = targetInfo(field);
+        if (!info.exists || !info.typeMatches || !info.editable) return;
+        if (fieldSat(field, pasted)) return;
+
+        const option = findSelectableOption(info.element, pasted);
+        if (!option) {
+            setCtMsg('Escalation Type پیست‌شده در لیست صفحه نیست؛ هنگام «اعمال در فرم وب» بررسی می‌شود.', 'info');
+            return;
+        }
+
+        setCtMsg('در حال نشاندن Escalation Type در فرم...', 'info');
+        const esc = info.element;
+        esc.value = option.value;
+        if (esc.options[esc.selectedIndex] !== option) option.selected = true;
+        esc.classList.add('epf-filled');
+        state.cancelRequested = false;
+        state.searching = true;
+        setBusy(true);
+        const result = await runAndWait(() => dispatchFieldEvents(esc), 500, 8000, () => {
+            setCtMsg('سامانه هنوز پاسخ نداده است؛ ممکن است نشست کاربری منقضی یا ارتباط قطع شده باشد.', 'info');
+        });
+        state.searching = false;
+        setBusy(false);
+        if (result.cancelled) {
+            setCtMsg('انتظار را لغو کردید؛ وضعیت Escalation Type و باکس Escalation % را روی فرم بررسی کنید.', 'info');
+            syncAllSelects();
+            refreshAll();
+            return;
+        }
+        if (result.error || result.timeout) {
+            setCtMsg('تغییر Escalation Type در سامانه تأیید نشد. وضعیت صفحه را بررسی کنید.', 'bad');
+            return;
+        }
+
+        if (fieldSat(field, pasted)) {
+            const fresh = document.getElementById(field.id);
+            if (fresh) fresh.classList.add('epf-filled');
+        }
+        syncAllSelects();
+        refreshAll();
+        setCtMsg('نوع قرارداد و Escalation Type تغییر کردند ✓ — باکس Escalation % روی فرم ظاهر شد؛ حالا «اعمال در فرم وب» را بزنید.', 'ok');
+    }
+
+    // ============================================================
+    // 12. HEADER MAPPING SETTINGS
+    // ============================================================
+    const settingsUi = {
+        built: false,
+        dirty: false,
+        defaultDraft: false,
+        lastResult: null,
+        checkedText: null,
+        headerArea: null,
+        statusBox: null,
+        grid: null,
+        dupLegendEl: null,
+        saveButton: null
+    };
+
+    function setSettingsStatus(text, kind) {
+        const box = settingsUi.statusBox;
+        if (!box) return;
+        box.textContent = text || '';
+        box.className = text ? 'epf-box epf-show epf-box-' + (kind || 'info') : 'epf-box';
+    }
+
+    /** Updates duplicate header count dynamically inside the legend text. */
+    function updateDupLegendCount(dupCount) {
+        if (!settingsUi.dupLegendEl) return;
+        const countStr = Number.isInteger(dupCount) && dupCount > 0 ? ` (${faNum(dupCount)} مورد - اولین ستون استفاده می‌شود)` : ' (اولین ستون استفاده می‌شود)';
+        settingsUi.dupLegendEl.textContent = 'زرد: تکراری' + countStr;
+    }
+
+    /** Renders the header grid; a null result shows the default grey state. */
+    function renderHeaderGrid(result) {
+        if (!settingsUi.grid) return;
+        settingsUi.grid.textContent = '';
+        const dupCount = result ? (result.dupCount || 0) : 0;
+        updateDupLegendCount(dupCount);
+
+        WEB_FIELDS.forEach((field, index) => {
+            const st = result && result.states ? result.states[field.key] : { st: 'ok', col: index };
+            const cell = makeElement('div', 'epf-hcell');
+            cell.title = field.label;
+
+            const name = makeElement('span', 'epf-hname', field.label);
+            const col = makeElement('span', 'epf-hcol');
+
+            if (st.st === 'missing') {
+                name.classList.add('epf-h-missing');
+                col.textContent = '—';
+                col.classList.add('epf-h-missing');
+            } else if (st.st === 'dup') {
+                name.classList.add('epf-h-dup');
+                col.textContent = Number.isInteger(st.col) ? String(st.col + 1) : '—';
+                col.classList.add('epf-h-dup');
+            } else {
+                col.textContent = Number.isInteger(st.col) ? String(st.col + 1) : '—';
+                if (st.col !== index) col.classList.add('epf-h-changed');
+            }
+
+            cell.append(name, col);
+            settingsUi.grid.appendChild(cell);
+        });
+    }
+
+    /** Resets the draft grid state after the header text changes. */
+    function onHeaderDraftChanged() {
+        settingsUi.dirty = true;
+        settingsUi.defaultDraft = false;
+        settingsUi.lastResult = null;
+        settingsUi.checkedText = null;
+        settingsUi.saveButton.disabled = true;
+        renderHeaderGrid(null);
+        setSettingsStatus('متن هدر تغییر کرده است؛ برای بررسی، «بررسی هدر» را بزنید.', 'info');
+    }
+
+    /** Validates the current header draft and updates the grid colors. */
+    function checkHeaderDraft() {
+        const raw = settingsUi.headerArea.value;
+        if (!raw.trim()) {
+            settingsUi.defaultDraft = false;
+            settingsUi.lastResult = null;
+            settingsUi.checkedText = null;
+            settingsUi.saveButton.disabled = true;
+            renderHeaderGrid(null);
+            setSettingsStatus('کادر هدر خالی است؛ ردیف عنوان ستون‌ها را از اکسل پیست کنید.', 'warn');
+            return;
+        }
+
+        const result = buildHeaderMapping(raw);
+        settingsUi.lastResult = result;
+        settingsUi.checkedText = raw;
+        renderHeaderGrid(result.parsed ? result : null);
+
+        if (!result.parsed) {
+            settingsUi.saveButton.disabled = true;
+            setSettingsStatus('فقط یک ردیف هدر باید ثبت شود؛ ردیف‌های اضافی را حذف کنید.', 'err');
+            return;
+        }
+        if (!result.ready) {
+            settingsUi.saveButton.disabled = true;
+            setSettingsStatus(faNum(result.missing) + ' هدر در ردیف پیست‌شده یافت نشد؛ نام‌های قرمز در جدول را بررسی کنید.', 'err');
+            return;
+        }
+        const dupCount = result.dupCount || 0;
+        settingsUi.saveButton.disabled = false;
+        if (dupCount) {
+            setSettingsStatus(faNum(dupCount) + ' هدر تکراری دارد (زرد در جدول)؛ اولین ستون یافت‌شده استفاده می‌شود. برای ثبت، «ذخیره هدر» را بزنید.', 'warn');
+        } else {
+            setSettingsStatus('هر ' + faNum(WEB_FIELDS.length) + ' هدر پیدا شد؛ برای ثبت، «ذخیره هدر» را بزنید.', 'ok');
+        }
+    }
+
+    /** Puts the panel back on the default 1..36 column order. */
+    function resetHeaderDraft() {
+        settingsUi.headerArea.value = '';
+        settingsUi.dirty = true;
+        settingsUi.defaultDraft = true;
+        settingsUi.lastResult = defaultMapping();
+        settingsUi.checkedText = '';
+        settingsUi.saveButton.disabled = false;
+        renderHeaderGrid(settingsUi.lastResult);
+        setSettingsStatus('حالت پیش‌فرض (ستون‌های ۱ تا ' + faNum(WEB_FIELDS.length) + ') آماده است؛ برای فعال‌سازی، «ذخیره هدر» را بزنید.', 'info');
+    }
+
+    /** Copies clipboard text into the header box without checking it. */
+    async function pasteHeaderFromClipboard() {
+        if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
+            setSettingsStatus('خواندن مستقیم Clipboard در این مرورگر در دسترس نیست؛ با Ctrl+V داخل کادر پیست کنید.', 'warn');
+            return;
+        }
+        try {
+            const text = await navigator.clipboard.readText();
+            if (!text) {
+                setSettingsStatus('متن Clipboard خالی است.', 'warn');
+                return;
+            }
+            settingsUi.headerArea.value = text;
+            onHeaderDraftChanged();
+            setSettingsStatus('متن Clipboard داخل کادر قرار گرفت؛ برای بررسی، «بررسی هدر» را بزنید.', 'info');
+        } catch (error) {
+            setSettingsStatus('مرورگر اجازه خواندن Clipboard را نداد؛ با Ctrl+V داخل کادر پیست کنید.', 'warn');
+        }
+    }
+
+    /** Builds the header registration panel. */
+    function buildSettings() {
+        if (settingsUi.built) return;
+        settingsUi.built = true;
+
+        const intro = makeElement('p', 'epf-settings-intro',
+            'ردیف عنوان ستون‌ها (Header) را از فایل اکسل کپی و با دکمه «پیست» در کادر زیر بریزید، سپس «بررسی هدر» را بزنید. تمام ' +
+            faNum(WEB_FIELDS.length) + ' عنوان باید وجود داشته باشند؛ ستون‌های اضافی مجازند و نادیده گرفته می‌شوند. حروف بزرگ و کوچک و فاصله‌های اضافی در تطبیق نادیده گرفته می‌شوند.');
+
+        const label = makeElement('label', 'epf-paste-label', 'ردیف هدر اکسل');
+        label.htmlFor = 'epf-header-area';
+        const area = makeElement('textarea', 'epf-settings-area');
+        area.id = 'epf-header-area';
+        area.spellcheck = false;
+        area.placeholder = 'Site ID\tContract Type\tLL Name\tOwner Type\t...';
+        area.setAttribute('aria-label', 'ردیف هدر اکسل');
+        settingsUi.headerArea = area;
+        area.addEventListener('input', onHeaderDraftChanged);
+
+        const layout = makeElement('div', 'epf-settings-layout');
+        const actions = makeElement('div', 'epf-settings-actions');
+        const pasteBtn = makeElement('button', 'epf-btn epf-btn-primary', 'پیست');
+        pasteBtn.type = 'button';
+        pasteBtn.addEventListener('click', pasteHeaderFromClipboard);
+        const checkBtn = makeElement('button', 'epf-btn epf-btn-primary', 'بررسی هدر');
+        checkBtn.type = 'button';
+        checkBtn.addEventListener('click', checkHeaderDraft);
+        actions.append(pasteBtn, checkBtn);
+        layout.append(area, actions);
+
+        settingsUi.statusBox = makeElement('div', 'epf-box');
+        settingsUi.statusBox.setAttribute('role', 'status');
+
+        const legend = makeElement('div', 'epf-hlegend');
+        legend.appendChild(makeElement('span', 'lg-title', 'راهنمای جدول:'));
+        legend.appendChild(makeElement('span', 'lg-def', 'خاکستری: پیش‌فرض'));
+        legend.appendChild(makeElement('span', 'lg-chg', 'سبز: شماره ستون تغییر کرده'));
+        settingsUi.dupLegendEl = makeElement('span', 'lg-dup', 'زرد: تکراری (اولین ستون استفاده می‌شود)');
+        legend.appendChild(settingsUi.dupLegendEl);
+        legend.appendChild(makeElement('span', 'lg-miss', 'قرمز: یافت نشده'));
+
+        settingsUi.grid = makeElement('div', 'epf-hgrid');
+
+        settingsView.append(intro, label, layout, settingsUi.statusBox, legend, settingsUi.grid);
+
+        const saveButton = makeElement('button', 'epf-btn epf-btn-apply', 'ذخیره هدر');
+        saveButton.type = 'button';
+        saveButton.addEventListener('click', saveHeaderSettings);
+        const cancelButton = makeElement('button', 'epf-btn epf-btn-secondary', 'انصراف');
+        cancelButton.type = 'button';
+        cancelButton.addEventListener('click', leaveSettings);
+        const resetButton = makeElement('button', 'epf-btn epf-btn-secondary epf-btn-reset', 'بازگشت به پیش‌فرض');
+        resetButton.type = 'button';
+        resetButton.addEventListener('click', resetHeaderDraft);
+        settingsUi.saveButton = saveButton;
+        settingsFooter.append(resetButton, cancelButton, saveButton);
+    }
+
+    /** Shows under the settings button whether the header mapping is default or customised. */
+    function updateGearState() {
+        let mode = 'none';
+        let text = 'ثبت نشده';
+        if (activeHeaderMapping) {
+            mode = isDefaultMapping(activeHeaderMapping) ? 'default' : 'custom';
+            text = mode === 'default' ? 'پیشفرض' : 'سفارشی شده';
+        }
+        gearBtn.dataset.mode = mode;
+        gearState.textContent = text;
+    }
+
+    function updateMapNote() {
+        const lines = [];
+        if (initNote) lines.push(initNote);
+        if (!activeHeaderMapping && !initNote) lines.push('برای شروع، ابتدا ردیف هدر اکسل را از «تنظیمات نگاشت هدر» ثبت کنید.');
+        mapNote.textContent = lines.join('\n');
+        mapNote.classList.toggle('epf-show', lines.length > 0);
+        reviewButton.disabled = !activeHeaderMapping || state.searching || state.calculating;
+    }
+
+    function openSettings() {
+        if (state.searching || state.calculating || state.settingsOpen) return;
+        buildSettings();
+        settingsUi.headerArea.value = activeHeaderText;
+        settingsUi.dirty = false;
+        settingsUi.defaultDraft = false;
+
+        if (activeHeaderMapping) {
+            const result = buildHeaderMapping(activeHeaderText);
+            settingsUi.lastResult = result;
+            settingsUi.checkedText = activeHeaderText;
+            renderHeaderGrid(result);
+            setSettingsStatus('هدر ثبت‌شده فعلی نمایش داده می‌شود؛ برای تغییر، هدر جدید را پیست کنید.', 'info');
+            settingsUi.saveButton.disabled = false;
+        } else {
+            settingsUi.lastResult = null;
+            settingsUi.checkedText = null;
+            settingsUi.saveButton.disabled = true;
+            renderHeaderGrid(null);
+            setSettingsStatus('هدر ثبت نشده است؛ ردیف عنوان ستون‌ها را پیست و «بررسی هدر» را بزنید.', 'info');
+        }
+
+        state.settingsOpen = true;
+        headerMain.hidden = true;
+        gearBtn.hidden = true;
+        closeMainBtn.hidden = true;
+        closeSettingsBtn.hidden = false;
+        headerIdentity.hidden = true;
+        header.classList.add('epf-in-settings');
+        content.hidden = true;
+        footer.hidden = true;
+        settingsView.hidden = false;
+        settingsFooter.hidden = false;
+        title.textContent = 'تنظیمات نگاشت هدر';
+        settingsView.scrollTop = 0;
+        settingsUi.headerArea.focus();
+    }
+
+    function hideSettings() {
+        state.settingsOpen = false;
+        settingsView.hidden = true;
+        settingsFooter.hidden = true;
+        headerMain.hidden = false;
+        gearBtn.hidden = false;
+        closeMainBtn.hidden = false;
+        closeSettingsBtn.hidden = true;
+        headerIdentity.hidden = false;
+        header.classList.remove('epf-in-settings');
+        content.hidden = false;
+        footer.hidden = false;
+        title.textContent = 'انتقال اطلاعات Excel به فرم BTS Property';
+        updateMapNote();
+    }
+
+    async function leaveSettings() {
+        if (!state.settingsOpen || state.confirmOpen) return;
+        if (settingsUi.dirty) {
+            const leave = await askConfirm('تغییرات ذخیره‌نشده حذف می‌شود. به پنجره اصلی برگردیم؟', 'برگشت بدون ذخیره', 'ماندن در تنظیمات');
+            if (!leave) return;
+        }
+        hideSettings();
+        refreshAll();
+        gearBtn.focus();
+    }
+
+    /** Validates and stores the registered Excel header row. */
+    function saveHeaderSettings() {
+        let text = settingsUi.headerArea.value;
+        let result;
+        if (settingsUi.defaultDraft && !text.trim()) {
+            text = WEB_FIELDS.map(field => field.label).join('\t');
+            result = defaultMapping();
+        } else {
+            if (!settingsUi.lastResult || !settingsUi.lastResult.ready || settingsUi.checkedText !== text) return;
+            result = settingsUi.lastResult;
+        }
+
+        activeHeaderText = text;
+        activeHeaderMapping = { columns: result.columns, cellCount: result.cellCount };
+        const stored = persistHeader(activeHeaderText);
+        initNote = stored ? '' : 'ذخیره دائمی هدر ممکن نیست؛ هدر فقط تا پایان این نشست فعال است.';
+        updateGearState();
+
+        state.webValues = {};
+        state.parsed = false;
+        state.reviewedText = '';
+        state.searchConfirmed = false;
+        settingsUi.dirty = false;
+        hideSettings();
+        resetParsedData();
+        clearMainMessage();
+        updateMapNote();
+        reviewButton.disabled = false;
+        pasteArea.focus();
+        showMainMessage(faNum(WEB_FIELDS.length) + ' هدر تأیید شد و در حافظه مرورگر ذخیره شد' +
+            (stored ? '.' : '؛ ذخیره دائمی ممکن نیست و فقط تا پایان این نشست فعال است.'), stored ? 'success' : 'warning');
+    }
+
+    // ============================================================
+    // 13. MODAL LIFECYCLE
+    // ============================================================
+    function openModal() {
+        buildRows();
+        state.isOpen = true;
+        overlay.classList.add('epf-open');
+        overlay.setAttribute('aria-hidden', 'false');
+        updateMapNote();
+        refreshAll();
+        setTimeout(() => pasteArea.focus(), 40);
+    }
+
+    function closeModal(force) {
+        if (!force && (state.calculating || state.searching)) return;
+        state.searching = false;
+        state.calculating = false;
+        if (state.settingsOpen) hideSettings();
+        state.isOpen = false;
+        overlay.classList.remove('epf-open');
+        overlay.setAttribute('aria-hidden', 'true');
+        pasteArea.value = '';
+        resetParsedData();
+        clearMainMessage();
+        fab.focus();
+    }
+
+    function waitUntilIdle(maxMs) {
+        return new Promise(resolve => {
+            const start = Date.now();
+            const check = () => {
+                if ((!state.searching && !state.calculating) || Date.now() - start >= maxMs) { resolve(); return; }
+                setTimeout(check, 40);
+            };
+            check();
+        });
+    }
+
+    /** Closes the modal; while the page is busy it asks, cancels the wait and then closes. */
+    async function requestClose(confirmParsed) {
+        if (state.confirmOpen) return;
+        if (state.searching || state.calculating) {
+            const leave = await askConfirm('عملیات هنوز در انتظار پاسخ سامانه است. انتظار لغو شود و پنجره بسته شود؟ (وضعیت فرم را بعداً بررسی کنید.)', 'لغو و بستن', 'ادامه انتظار');
+            if (!leave) return;
+            cancelActiveWait();
+            await waitUntilIdle(1500);
+            closeModal(true);
+            return;
+        }
+        if (confirmParsed && state.parsed) {
+            const ok = await askConfirm('اطلاعات بررسی‌شده پاک می‌شود. پنجره بسته شود؟', 'بستن پنجره', 'ماندن');
+            if (!ok) return;
+        }
+        closeModal(true);
+    }
+
+    let toastTimer = null;
+    function showToast(message, duration) {
+        toast.textContent = message;
+        toast.classList.add('epf-toast-show');
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('epf-toast-show'), duration || 8000);
+    }
+
+    /** Small in-page confirmation dialog shown instead of the browser prompt. */
+    function askConfirm(message, okLabel, stayLabel) {
+        return new Promise(resolve => {
+            confirmMsg.textContent = message;
+            confirmOkBtn.textContent = okLabel;
+            confirmStayBtn.textContent = stayLabel;
+            confirmOverlay.classList.add('epf-open');
+            confirmOverlay.setAttribute('aria-hidden', 'false');
+            state.confirmOpen = true;
+
+            const finish = result => {
+                confirmOverlay.classList.remove('epf-open');
+                confirmOverlay.setAttribute('aria-hidden', 'true');
+                state.confirmOpen = false;
+                confirmOkBtn.removeEventListener('click', onOk);
+                confirmStayBtn.removeEventListener('click', onStay);
+                confirmOverlay.removeEventListener('click', onBackdrop);
+                document.removeEventListener('keydown', onKey, true);
+                resolve(result);
+            };
+            const onOk = () => finish(true);
+            const onStay = () => finish(false);
+            const onBackdrop = event => { if (event.target === confirmOverlay) finish(false); };
+            const onKey = event => {
+                if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false); }
+            };
+
+            confirmOkBtn.addEventListener('click', onOk);
+            confirmStayBtn.addEventListener('click', onStay);
+            confirmOverlay.addEventListener('click', onBackdrop);
+            document.addEventListener('keydown', onKey, true);
+            confirmStayBtn.focus();
+        });
+    }
+
+    /** Updates the identity line (Site ID - Contract Type) shown beside the modal title. */
+    function updateHeaderIdentity() {
+        const site = String(getVal(FIELD_KEYS.SITE_ID) || '').trim();
+        const contract = String(state.headerContract || getVal(FIELD_KEYS.CONTRACT_TYPE) || '').trim();
+        headerIdentity.textContent = (site || contract) ? (site || '—') + ' - ' + (contract || '—') : '— —';
+    }
+
+    // ============================================================
+    // 14. PAGE UPDATE HANDLING
+    // ============================================================
+    function scheduleRefresh() {
+        if (!state.isOpen || state.refreshQueued || state.searching || state.calculating) return;
+        state.refreshQueued = true;
+        setTimeout(() => {
+            state.refreshQueued = false;
+            if (!state.isOpen) return;
+            if (state.parsed) syncAllSelects();
+            refreshAll();
+            renderContractFix();
+        }, 40);
+    }
+
+    const identityIds = new Set([
+        FIELD_BY_KEY[FIELD_KEYS.SITE_ID].id,
+        FIELD_BY_KEY[FIELD_KEYS.CONTRACT_TYPE].id,
+        LL_NAME_ID
+    ]);
+
+    function onIdentityFieldChanged(event) {
+        if (event.target && identityIds.has(event.target.id)) {
+            if (!state.searching && event.target.id === SITE_ID_INPUT_ID) state.searchConfirmed = false;
+            scheduleRefresh();
+        }
+    }
+
+    document.addEventListener('input', onIdentityFieldChanged, true);
+    document.addEventListener('change', onIdentityFieldChanged, true);
+
+    function hookPageRefresh() {
+        const prm = getPRM();
+        if (prm && typeof prm.add_endRequest === 'function') {
+            prm.add_endRequest(scheduleRefresh);
+            return;
+        }
+        const panel = document.getElementById('Content_UpdatePanelInsert');
+        if (panel) new MutationObserver(scheduleRefresh).observe(panel, { childList: true, subtree: true });
+    }
+
+    // ============================================================
+    // 15. EVENT HANDLERS & INITIALIZATION
+    // ============================================================
+    fab.addEventListener('click', openModal);
+    closeMainBtn.addEventListener('click', () => { requestClose(false); });
+    closeSettingsBtn.addEventListener('click', () => { leaveSettings(); });
+    pasteButton.addEventListener('click', pasteFromClipboard);
+    reviewButton.addEventListener('click', reviewPastedRow);
+    pasteArea.addEventListener('input', updatePasteRevisionWarning);
+    applyButton.addEventListener('click', () => {
+        applyAllFields().catch(error => {
+            state.searching = false;
+            state.calculating = false;
+            setBusy(false);
+            showMainMessage('خطای پیش‌بینی‌نشده هنگام اعمال اطلاعات رخ داد. وضعیت فرم را بررسی کنید.', 'error');
+        });
+    });
+    cancelButton.addEventListener('click', () => {
+        if (state.searching || state.calculating) cancelActiveWait();
+        else closeModal(true);
+    });
+    onlyBox.addEventListener('change', updateGroups);
+    gearBtn.addEventListener('click', openSettings);
+    toast.addEventListener('click', () => toast.classList.remove('epf-toast-show'));
+    modal.addEventListener('click', event => event.stopPropagation());
+
+    document.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !state.isOpen || state.confirmOpen) return;
+        if (state.settingsOpen) { leaveSettings(); return; }
+        requestClose(true);
+    });
+
+    modal.addEventListener('keydown', event => {
+        if (event.key !== 'Tab') return;
+        const focusable = Array.from(modal.querySelectorAll('button, input, select, textarea'))
+            .filter(element => !element.disabled && element.offsetParent !== null);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    });
+
+    (document.head || document.documentElement).appendChild(styleElement);
+    document.body.appendChild(root);
+    hookPageRefresh();
+    updateMapNote();
+    updateGearState();
+    updateChips(null);
+})();
