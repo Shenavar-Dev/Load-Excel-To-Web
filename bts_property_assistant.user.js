@@ -11,6 +11,16 @@
 // @run-at       document-idle
 // ==/UserScript==
 
+/*
+ * Version 6.3.1 (اصلاحات منطقی، چیدمان تنظیمات، تراز باکس‌ها و بهبود دکمه‌ها)
+ * v6.3.1 changes:
+ * - Unified modal close behavior (requestClose(true)), guarded closeModal against double execution, and reset cancelRequested cleanly.
+ * - Disabled Apply button when 0 fields are marked will-change; updated Calculate wait button label to "توقف پیگیری".
+ * - Added Site ID missing-data guard before auto-search, unknown header detection in settings, and data-reason attribute on unmapped/no-data cells.
+ * - Settings layout: centered Site ID row above a 5x7 grid with larger text, larger guide text, top-left auto-width "بازگشت به پیش‌فرض" button, and centered footer buttons.
+ * - Main modal: taller viewport-safe height, centered main status message, left-aligned input boxes stretching to end of div, and soft-red cancel buttons.
+ */
+
 (function () {
     'use strict';
 
