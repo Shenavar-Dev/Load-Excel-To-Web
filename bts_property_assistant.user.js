@@ -1,6 +1,7 @@
 // ==UserScript==
 // @name         BTS Property Excel Assistant
 // @namespace    https://btsproperty.mtnirancell.ir/
+// @author       Ebrahim Shenavar | Irancell
 // @version      6.3.0
 // @description  Flexible header-based Excel review and safe form population for BTS Property
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
