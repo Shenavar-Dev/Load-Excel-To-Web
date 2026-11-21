@@ -2,7 +2,7 @@
 // @name         BTS Property Excel Assistant
 // @namespace    https://btsproperty.mtnirancell.ir/
 // @author       Ebrahim Shenavar | Irancell
-// @version      6.3.0
+// @version      6.3.1
 // @description  Flexible header-based Excel review and safe form population for BTS Property
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
 // @downloadURL  https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
@@ -84,7 +84,17 @@
             return { parsed: false, ready: false, missing: 0, mappedCount: 0 };
         }
 
-        const normalized = parsedRows[0].map(normalizeHeader);
+        const rawCells = parsedRows[0];
+        const normalized = rawCells.map(normalizeHeader);
+        const knownSet = new Set(WEB_FIELDS.map(f => normalizeHeader(f.label)));
+        const unknownHeaders = [];
+        rawCells.forEach((rawCell, idx) => {
+            const norm = normalized[idx];
+            if (norm && !knownSet.has(norm)) {
+                unknownHeaders.push(String(rawCell).trim());
+            }
+        });
+
         const columns = Object.create(null);
         const states = Object.create(null);
         let missing = 0;
@@ -121,8 +131,8 @@
             hasContractType,
             columns,
             states,
-            cellCount: parsedRows[0].length,
-            dupCount
+            dupCount,
+            unknownHeaders
         };
     }
 
@@ -244,7 +254,7 @@
     if (activeHeaderText) {
         const bootResult = buildHeaderMapping(activeHeaderText);
         if (bootResult.parsed && bootResult.ready) {
-            activeHeaderMapping = { columns: bootResult.columns, cellCount: bootResult.cellCount };
+            activeHeaderMapping = { columns: bootResult.columns };
         } else initNote = 'هدر ذخیره‌شده معتبر نیست؛ از تنظیمات نگاشت هدر دوباره ثبت کنید.';
     }
 
@@ -426,12 +436,14 @@
     let activeWait = null;
 
     /** Releases the wait in progress; read-only waits (search) also abort their request. */
+    // v6.3.1: Cancel active wait and reset cancelRequested flag cleanly
     function cancelActiveWait() {
         state.cancelRequested = true;
         if (activeWait) activeWait.cancel();
         state.searching = false;
         state.calculating = false;
         setBusy(false);
+        state.cancelRequested = false;
     }
 
     /** Runs an action and waits for its ASP.NET partial postback (cancellable). */
@@ -539,8 +551,9 @@
             padding: 16px; background: rgba(30,25,21,.55); backdrop-filter: blur(4px);
         }
         #epf-overlay.epf-open { display: flex; }
+        /* v6.3.1: Slightly taller modal while staying safely inside browser viewport */
         #epf-modal {
-            width: min(96vw, 1040px); height: min(92vh, 900px); max-height: 92vh; display: flex;
+            width: min(96vw, 1060px); height: min(95vh, 960px); max-height: 95vh; display: flex;
             flex-direction: column; overflow: hidden; background: #fff; color: var(--ink); border-radius: 14px;
             box-shadow: 0 18px 60px rgba(0,0,0,.28); direction: rtl; animation: epf-enter .2s ease-out;
         }
@@ -586,8 +599,14 @@
         .epf-btn-primary { color: var(--pri); background: var(--acc); }
         .epf-btn-apply { color: #fff; background: var(--ok); }
         .epf-btn-secondary { color: #45545a; background: #e9edef; }
+        /* v6.3.1: Soft red cancel button style and auto-width top-left reset button */
+        .epf-btn-cancel { color: #842029; background: #f8d7da; border: 1px solid #f1aeb5; }
+        .epf-btn-cancel:hover:not(:disabled) { background: #f1c2c7; }
+        .epf-btn-reset { width: auto; padding: 5px 12px; font-size: 11px; color: var(--pri); background: #e6f3f8; border: 1px solid #b8dce8; }
+        .epf-btn-reset:hover:not(:disabled) { background: #d4ebf4; }
         .epf-content { flex: 1 1 auto; min-height: 0; padding: 10px 14px; overflow: auto; overscroll-behavior: contain; }
-        #epf-main-message { display: none; margin: 0 0 8px; padding: 6px 9px; border-radius: 7px; font-size: 11.5px; line-height: 1.65; white-space: pre-wrap; }
+        /* v6.3.1: Centered main status message */
+        #epf-main-message { display: none; margin: 0 0 8px; padding: 6px 12px; border-radius: 7px; font-size: 11.5px; line-height: 1.65; white-space: pre-wrap; text-align: center; }
         #epf-main-message.epf-show { display: block; }
         .epf-msg-error { color: #842029; background: #f8d7da; border: 1px solid #f5c6cb; }
         .epf-msg-success { color: #155724; background: #d4edda; }
@@ -601,26 +620,26 @@
             background: #e6f3f8; border-bottom: 1px solid #c3dfe9; }
         .epf-mrow { display: flex; direction: ltr; gap: 7px; }
         .epf-mrow + .epf-mrow { margin-top: 6px; }
-        .epf-fcell { flex: 1 1 0; min-width: 0; display: flex; gap: 6px; align-items: flex-start; padding: 5px 8px;
+        /* v6.3.1: CSS variable --w for responsive cell sizing, plus left-aligned input boxes stretching to end of div */
+        .epf-fcell { --w: 1 1 0; flex: var(--w); min-width: 0; display: flex; direction: ltr; gap: 6px; align-items: flex-start; padding: 5px 8px;
             border: 1px solid var(--line); border-radius: 7px; background: #fff; }
-        .epf-mrow.epf-facing .epf-fcell { flex: 1 1 0; }
-        .epf-fcell.epf-fwcell { flex: 1 1 100%; }
-        /* v6.3.0: Custom box proportions for Payment Comment, Phone Number, and Cancellation Date/Comment */
-        .epf-fcell[data-key="paymentComment"] { flex: 0 0 calc(50% - 3.5px); max-width: calc(50% - 3.5px); }
-        .epf-fcell[data-key="nationalId"], .epf-fcell[data-key="llManner"] { flex: 0.8 1 0; }
-        .epf-fcell[data-key="phoneNumber"] { flex: 1.4 1 0; }
-        .epf-fcell[data-key="cancellationDate"] { flex: 0 0 285px; max-width: 36%; }
-        .epf-fcell[data-key="cancellationComment"] { flex: 1 1 0; }
+        .epf-mrow.epf-facing .epf-fcell { --w: 1 1 0; }
+        .epf-fcell.epf-fwcell { --w: 1 1 100%; }
+        .epf-fcell[data-key="paymentComment"] { --w: 0 0 calc(50% - 3.5px); max-width: calc(50% - 3.5px); }
+        .epf-fcell[data-key="nationalId"], .epf-fcell[data-key="llManner"] { --w: 0.8 1 0; }
+        .epf-fcell[data-key="phoneNumber"] { --w: 1.4 1 0; }
+        .epf-fcell[data-key="cancellationDate"] { --w: 0 0 285px; max-width: 36%; }
+        .epf-fcell[data-key="cancellationComment"] { --w: 1 1 0; }
         .epf-fcell[data-st="will-change"] { background: #f2faf3; border-color: #b9dfc0; }
         .epf-fcell[data-st="same"] { background: #f4f6f7; border-color: #d8dedf; }
         .epf-fcell[data-st="not-editable"] { background: #fffbeb; border-color: #f0d78c; }
         .epf-fcell[data-st="invalid-select"] { background: #fff4f4; border-color: #efb7bd; }
         /* v6.3.0: Keep unmapped/missing-data yellow cells visible even in only-changes mode */
         #epf-fields.epf-only-changes .epf-fcell:not([data-st="will-change"]):not([data-unmapped="1"]) { display: none; }
-        .epf-flabel { flex: 0 0 135px; max-width: 42%; min-width: 100px; padding-top: 5px; direction: ltr; text-align: right; color: #34464d;
+        .epf-flabel { flex: 0 0 auto; max-width: 44%; min-width: 78px; padding-top: 5px; direction: ltr; text-align: left; color: #34464d;
             font-size: 11.5px; font-weight: 700; overflow-wrap: anywhere; }
         .epf-flabel bdi::after { content: ":"; margin-inline-start: 1px; }
-        .epf-fwrap { flex: 1 1 0; min-width: 0; direction: rtl; }
+        .epf-fwrap { flex: 1 1 auto; width: 100%; min-width: 0; direction: rtl; }
         .epf-field-control {
             display: block; width: 100%; min-height: 30px; padding: 4px 6px; border: 1px solid #cbd3d6;
             border-radius: 6px; color: var(--ink); background: #fff; font-size: 11.5px; line-height: 1.5; text-align: start;
@@ -646,8 +665,9 @@
         .epf-ct-bad { color: var(--bad); }
         .epf-ct-ok { color: var(--ok); font-weight: 700; }
         .epf-footer { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 7px 12px 9px; border-top: 1px solid #e8edef; background: #fbfcfc; }
-        .epf-settings-footer { direction: ltr; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: center; }
-        .epf-settings-footer .epf-btn { min-height: 34px; padding: 6px 8px; }
+        /* v6.3.1: Centered settings footer buttons */
+        .epf-settings-footer { direction: rtl; display: flex; justify-content: center; align-items: center; gap: 14px; }
+        .epf-settings-footer .epf-btn { min-width: 140px; min-height: 36px; padding: 6px 16px; }
         /* v6.3.0: Spaced footer actions and larger left-aligned only-changes checkbox */
         .epf-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-inline-end: 16px; }
         .epf-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 20px; background: #edf0f1; color: #536168; font-size: 10.5px; white-space: nowrap; }
@@ -667,26 +687,30 @@
         }
         #epf-toast.epf-toast-show { opacity: 1; transform: translateY(0); pointer-events: auto; }
         .epf-filled { background-color: #e8f5e9 !important; border-color: #28a745 !important; }
+        /* v6.3.1: Larger settings intro text, centered Site ID row, and 5x7 grid with larger font */
         .epf-settings { flex: 1 1 auto; min-height: 0; overflow: auto; }
-        .epf-settings-intro { margin: 0 0 8px; font-size: 11.5px; line-height: 1.75; color: #44545a; text-align: right; }
+        .epf-settings-topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+        .epf-settings-intro { margin: 0 0 8px; font-size: 13px; line-height: 1.85; color: #36464d; text-align: right; }
         .epf-settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 8px; direction: ltr; align-items: stretch; }
         .epf-settings-actions { display: flex; flex-direction: column; gap: 6px; }
         .epf-settings-actions .epf-btn { min-height: 34px; padding: 5px 7px; font-size: 11px; }
         .epf-settings-area { display: block; width: 100%; min-height: 60px; max-height: 130px; resize: vertical; padding: 7px 9px;
             border: 1px solid #cbd3d6; border-radius: 7px; background: #fbfcfc; color: var(--ink); font-size: 11.5px;
             line-height: 1.55; direction: ltr; text-align: left; white-space: pre; }
-        .epf-hlegend { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 18px; margin: 9px 0 0; font-size: 11px; line-height: 1.65; color: var(--mut); }
+        .epf-hlegend { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 18px; margin: 9px 0 0; font-size: 11.5px; line-height: 1.65; color: var(--mut); }
         .epf-hlegend span { font-weight: 700; }
         .epf-hlegend .lg-miss { color: var(--bad); }
         .epf-hlegend .lg-dup { color: #b8860b; }
         .epf-hlegend .lg-chg { color: var(--ok); }
         .epf-hlegend .lg-def { color: #8a959b; }
-        .epf-hgrid { direction: ltr; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; margin-top: 6px;
-            padding: 7px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfc; }
-        .epf-hcell { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; padding: 4px 6px;
-            border: 1px solid #e7eced; border-radius: 5px; background: #fff; font-size: 11px; }
-        .epf-hname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
-        .epf-hcol { flex: 0 0 auto; min-width: 14px; text-align: center; font-weight: 700; color: #98a3a8; }
+        .epf-hgrid-wrap { margin-top: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfc; }
+        .epf-hgrid-site-row { display: flex; justify-content: center; margin-bottom: 8px; }
+        .epf-hgrid-site-row .epf-hcell { width: min(260px, 100%); border-color: #b8dce8; background: #f2f9fc; }
+        .epf-hgrid { direction: ltr; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+        .epf-hcell { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; padding: 7px 9px;
+            border: 1px solid #e2e8ea; border-radius: 6px; background: #fff; font-size: 12.5px; }
+        .epf-hname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 600; }
+        .epf-hcol { flex: 0 0 auto; min-width: 18px; text-align: center; font-weight: 800; font-size: 12.5px; color: #98a3a8; }
         .epf-hname.epf-h-missing, .epf-hcol.epf-h-missing { color: var(--bad); }
         .epf-hname.epf-h-dup, .epf-hcol.epf-h-dup { color: #b8860b; }
         .epf-hcol.epf-h-changed { color: var(--ok); }
@@ -709,11 +733,11 @@
             .epf-header { padding: 8px 10px; }
             .epf-content { padding: 8px; }
             .epf-mrow { flex-wrap: wrap; }
-            .epf-fcell { flex: 1 1 100% !important; max-width: 100% !important; }
+            .epf-fcell { --w: 1 1 100% !important; flex: 1 1 100% !important; max-width: 100% !important; }
             .epf-flabel { max-width: 100%; flex: 0 0 auto; }
-            .epf-settings-footer { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .epf-settings-footer { flex-wrap: wrap; }
             .epf-footer { padding: 6px 8px; }
-            .epf-hgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .epf-hgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .epf-settings-layout { grid-template-columns: minmax(0, 1fr) 112px; }
             .epf-identity { max-width: 180px; font-size: 11px; }
         }
@@ -767,6 +791,11 @@
     headerIdentity.id = 'epf-identity';
     headerIdentity.setAttribute('role', 'status');
 
+    // v6.3.1: Top-left auto-width reset button shown in settings header opposite to close button
+    const topResetBtn = makeElement('button', 'epf-btn epf-btn-reset', 'بازگشت به پیش‌فرض');
+    topResetBtn.type = 'button';
+    topResetBtn.hidden = true;
+
     const closeMainBtn = makeElement('button', 'epf-xbtn', '✕');
     closeMainBtn.id = 'epf-x-main';
     closeMainBtn.type = 'button';
@@ -805,7 +834,7 @@
     headerMain.append(subtitle, mapNote, pasteLayout, pasteWarning);
     const titleWrap = makeElement('div', 'epf-title-wrap');
     titleWrap.append(closeMainBtn, closeSettingsBtn, title);
-    headerTop.append(titleWrap, headerIdentity, gearBtn);
+    headerTop.append(titleWrap, headerIdentity, gearBtn, topResetBtn);
     header.append(headerTop, headerMain);
 
     const content = makeElement('div', 'epf-content');
@@ -841,7 +870,7 @@
     const applyButton = makeElement('button', 'epf-btn epf-btn-apply', 'اعمال در فرم وب');
     applyButton.type = 'button';
     applyButton.disabled = true;
-    const cancelButton = makeElement('button', 'epf-btn epf-btn-secondary', 'انصراف');
+    const cancelButton = makeElement('button', 'epf-btn epf-btn-cancel', 'انصراف');
     cancelButton.type = 'button';
     footerActions.append(chipsBox, onlyLabel, applyButton, cancelButton);
     footer.append(footerActions);
@@ -1035,12 +1064,19 @@
         mainMessage.className = '';
     }
 
-    function setRowStatus(key, statusType, message, currentText, unmappedFlag) {
+    // v6.3.1: Track data-reason (no-header / no-data / other) alongside statusType
+    function setRowStatus(key, statusType, message, currentText, reason) {
         const item = rows[key];
         if (!item) return;
         item.row.dataset.st = statusType;
-        if (unmappedFlag) item.row.dataset.unmapped = '1';
-        else delete item.row.dataset.unmapped;
+        if (reason) {
+            item.row.dataset.reason = reason;
+            if (reason === 'no-header' || reason === 'no-data') item.row.dataset.unmapped = '1';
+            else delete item.row.dataset.unmapped;
+        } else {
+            delete item.row.dataset.reason;
+            delete item.row.dataset.unmapped;
+        }
         item.status.textContent = message || '';
         if (currentText === undefined || currentText === null) {
             item.cur.hidden = true;
@@ -1076,11 +1112,11 @@
     function evaluateField(key) {
         const field = FIELD_BY_KEY[key];
         if (!isMapped(key)) {
-            setRowStatus(key, 'not-editable', 'هدر ندارد - بررسی نمیشود', null, true);
+            setRowStatus(key, 'not-editable', 'هدر ندارد - بررسی نمیشود', null, 'no-header');
             return 'not-editable';
         }
         if (state.outOfRange && state.outOfRange[key]) {
-            setRowStatus(key, 'not-editable', 'داده ندارد - بررسی نمیشود', null, true);
+            setRowStatus(key, 'not-editable', 'داده ندارد - بررسی نمیشود', null, 'no-data');
             return 'not-editable';
         }
 
@@ -1198,8 +1234,10 @@
         updateChips(counts);
         updateGroups();
 
+        // v6.3.1: Disable Apply button when identity fails OR 0 fields will change
         const identity = validateIdentity();
-        applyButton.disabled = !identity.ok || state.searching || state.calculating;
+        const hasChanges = counts['will-change'] > 0;
+        applyButton.disabled = !identity.ok || !hasChanges || state.searching || state.calculating;
 
         if (state.searching || state.calculating) return;
         const invalidFields = WEB_FIELDS.filter(field => rows[field.key].row.dataset.st === 'invalid-select');
@@ -1309,15 +1347,17 @@
         pasteWarning.classList.toggle('epf-show', changed);
     }
 
+    // v6.3.1: Distinct label "توقف پیگیری" during Calculate and disable Apply when 0 changes exist
     function setBusy(busy) {
         pasteButton.disabled = busy;
         reviewButton.disabled = busy || !activeHeaderMapping;
         pasteArea.disabled = busy;
         gearBtn.disabled = busy;
         if (ctBtn) ctBtn.disabled = busy;
-        cancelButton.textContent = busy ? 'لغو انتظار' : 'انصراف';
+        cancelButton.textContent = !busy ? 'انصراف' : (state.calculating ? 'توقف پیگیری' : 'لغو انتظار');
         cancelButton.disabled = false;
-        applyButton.disabled = busy || !state.parsed || !validateIdentity().ok;
+        const hasChanges = WEB_FIELDS.some(f => rows[f.key] && rows[f.key].row.dataset.st === 'will-change');
+        applyButton.disabled = busy || !state.parsed || !validateIdentity().ok || !hasChanges;
     }
 
     function resetParsedData() {
@@ -1414,9 +1454,18 @@
         updatePasteRevisionWarning();
         refreshAll();
 
+        // v6.3.1: Stop cleanly before search if Site ID cell is missing or empty
+        const siteIdValue = String(getVal(FIELD_KEYS.SITE_ID)).trim();
+        if (!siteIdValue) {
+            state.searchConfirmed = false;
+            refreshAll();
+            showMainMessage('مقدار Site ID در ردیف پیست‌شده وجود ندارد یا خالی است؛ جستجو انجام نشد.', 'error');
+            return;
+        }
+
         state.searching = true;
         setBusy(true);
-        const search = await performAutoSearch(String(getVal(FIELD_KEYS.SITE_ID)).trim());
+        const search = await performAutoSearch(siteIdValue);
         state.searching = false;
         setBusy(false);
 
@@ -1794,9 +1843,11 @@
         settingsUi.dupLegendEl.textContent = 'زرد: تکراری' + countStr;
     }
 
+    // v6.3.1: Render Site ID centered on top row and remaining 35 fields in a 5x7 grid
     /** Renders the header grid; a null result shows the default grey state. */
     function renderHeaderGrid(result) {
-        if (!settingsUi.grid) return;
+        if (!settingsUi.grid || !settingsUi.siteRow) return;
+        settingsUi.siteRow.textContent = '';
         settingsUi.grid.textContent = '';
         const dupCount = result ? (result.dupCount || 0) : 0;
         updateDupLegendCount(dupCount);
@@ -1823,7 +1874,11 @@
             }
 
             cell.append(name, col);
-            settingsUi.grid.appendChild(cell);
+            if (field.key === FIELD_KEYS.SITE_ID) {
+                settingsUi.siteRow.appendChild(cell);
+            } else {
+                settingsUi.grid.appendChild(cell);
+            }
         });
     }
 
@@ -1874,14 +1929,20 @@
             }
             return;
         }
+        // v6.3.1: Include unknown header names notice in settings status if present
         const dupCount = result.dupCount || 0;
+        const unknownList = result.unknownHeaders || [];
         settingsUi.saveButton.disabled = false;
         const summaryPrefix = faNum(result.mappedCount) + ' هدر از ' + faNum(WEB_FIELDS.length) + ' هدر شناسایی شد' +
             (result.missing > 0 ? ' (' + faNum(result.missing) + ' ستون فاقد هدر بررسی نخواهند شد)' : '');
+        const unknownNote = unknownList.length
+            ? '
+عنوان‌های ناشناخته (نادیده گرفته می‌شوند): ' + unknownList.slice(0, 8).join('، ') + (unknownList.length > 8 ? ' ...' : '')
+            : '';
         if (dupCount) {
-            setSettingsStatus(summaryPrefix + '؛ ' + faNum(dupCount) + ' هدر تکراری دارد (زرد در جدول) که اولین ستون استفاده می‌شود. برای ثبت، «ذخیره هدر» را بزنید.', 'warn');
+            setSettingsStatus(summaryPrefix + '؛ ' + faNum(dupCount) + ' هدر تکراری دارد (زرد در جدول) که اولین ستون استفاده می‌شود. برای ثبت، «ذخیره هدر» را بزنید.' + unknownNote, 'warn');
         } else {
-            setSettingsStatus(summaryPrefix + '؛ برای ثبت، «ذخیره هدر» را بزنید.', 'ok');
+            setSettingsStatus(summaryPrefix + '؛ برای ثبت، «ذخیره هدر» را بزنید.' + unknownNote, unknownList.length ? 'warn' : 'ok');
         }
     }
 
@@ -1959,21 +2020,24 @@
         legend.appendChild(settingsUi.dupLegendEl);
         legend.appendChild(makeElement('span', 'lg-miss', 'قرمز: هدر ندارد (بررسی نمیشود)'));
 
+        // v6.3.1: Wrapper with Site ID centered row on top + 5x7 grid below; top-left reset button; centered footer buttons
+        const gridWrap = makeElement('div', 'epf-hgrid-wrap');
+        settingsUi.siteRow = makeElement('div', 'epf-hgrid-site-row');
         settingsUi.grid = makeElement('div', 'epf-hgrid');
+        gridWrap.append(settingsUi.siteRow, settingsUi.grid);
 
-        settingsView.append(intro, label, layout, settingsUi.statusBox, legend, settingsUi.grid);
+        settingsView.append(intro, label, layout, settingsUi.statusBox, legend, gridWrap);
+
+        topResetBtn.addEventListener('click', resetHeaderDraft);
 
         const saveButton = makeElement('button', 'epf-btn epf-btn-apply', 'ذخیره هدر');
         saveButton.type = 'button';
         saveButton.addEventListener('click', saveHeaderSettings);
-        const cancelButton = makeElement('button', 'epf-btn epf-btn-secondary', 'انصراف');
+        const cancelButton = makeElement('button', 'epf-btn epf-btn-cancel', 'انصراف');
         cancelButton.type = 'button';
         cancelButton.addEventListener('click', leaveSettings);
-        const resetButton = makeElement('button', 'epf-btn epf-btn-secondary epf-btn-reset', 'بازگشت به پیش‌فرض');
-        resetButton.type = 'button';
-        resetButton.addEventListener('click', resetHeaderDraft);
         settingsUi.saveButton = saveButton;
-        settingsFooter.append(resetButton, cancelButton, saveButton);
+        settingsFooter.append(saveButton, cancelButton);
     }
 
     /** Shows under the settings button whether the header mapping is default or customised. */
@@ -2025,6 +2089,7 @@
         closeMainBtn.hidden = true;
         closeSettingsBtn.hidden = false;
         headerIdentity.hidden = true;
+        topResetBtn.hidden = false;
         header.classList.add('epf-in-settings');
         content.hidden = true;
         footer.hidden = true;
@@ -2044,6 +2109,7 @@
         closeMainBtn.hidden = false;
         closeSettingsBtn.hidden = true;
         headerIdentity.hidden = false;
+        topResetBtn.hidden = true;
         header.classList.remove('epf-in-settings');
         content.hidden = false;
         footer.hidden = false;
@@ -2075,7 +2141,7 @@
         }
 
         activeHeaderText = text;
-        activeHeaderMapping = { columns: result.columns, cellCount: result.cellCount };
+        activeHeaderMapping = { columns: result.columns };
         const stored = persistHeader(activeHeaderText);
         initNote = stored ? '' : 'ذخیره دائمی هدر ممکن نیست؛ هدر فقط تا پایان این نشست فعال است.';
         updateGearState();
@@ -2109,10 +2175,13 @@
         setTimeout(() => pasteArea.focus(), 40);
     }
 
+    // v6.3.1: Guard against duplicate closeModal calls and reset cancelRequested
     function closeModal(force) {
+        if (!state.isOpen) return;
         if (!force && (state.calculating || state.searching)) return;
         state.searching = false;
         state.calculating = false;
+        state.cancelRequested = false;
         if (state.settingsOpen) hideSettings();
         state.isOpen = false;
         overlay.classList.remove('epf-open');
@@ -2212,6 +2281,7 @@
             state.refreshQueued = false;
             if (!state.isOpen) return;
             if (state.parsed) syncAllSelects();
+            updateHeaderIdentity();
             refreshAll();
             renderContractFix();
         }, 40);
@@ -2247,7 +2317,8 @@
     // 15. EVENT HANDLERS & INITIALIZATION
     // ============================================================
     fab.addEventListener('click', openModal);
-    closeMainBtn.addEventListener('click', () => { requestClose(false); });
+    // v6.3.1: Unified modal close confirmation across close button, cancel button, and Escape
+    closeMainBtn.addEventListener('click', () => { requestClose(true); });
     closeSettingsBtn.addEventListener('click', () => { leaveSettings(); });
     pasteButton.addEventListener('click', pasteFromClipboard);
     reviewButton.addEventListener('click', reviewPastedRow);
@@ -2262,7 +2333,7 @@
     });
     cancelButton.addEventListener('click', () => {
         if (state.searching || state.calculating) cancelActiveWait();
-        else closeModal(true);
+        else requestClose(true);
     });
     onlyBox.addEventListener('change', updateGroups);
     gearBtn.addEventListener('click', openSettings);
