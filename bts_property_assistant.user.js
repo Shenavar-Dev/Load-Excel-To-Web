@@ -1946,8 +1946,7 @@
         const summaryPrefix = faNum(result.mappedCount) + ' هدر از ' + faNum(WEB_FIELDS.length) + ' هدر شناسایی شد' +
             (result.missing > 0 ? ' (' + faNum(result.missing) + ' ستون فاقد هدر بررسی نخواهند شد)' : '');
         const unknownNote = unknownList.length
-            ? '
-عنوان‌های ناشناخته (نادیده گرفته می‌شوند): ' + unknownList.slice(0, 8).join('، ') + (unknownList.length > 8 ? ' ...' : '')
+            ? '\nعنوان‌های ناشناخته (نادیده گرفته می‌شوند): ' + unknownList.slice(0, 8).join('، ') + (unknownList.length > 8 ? ' ...' : '')
             : '';
         if (dupCount) {
             setSettingsStatus(summaryPrefix + '؛ ' + faNum(dupCount) + ' هدر تکراری دارد (زرد در جدول) که اولین ستون استفاده می‌شود. برای ثبت، «ذخیره هدر» را بزنید.' + unknownNote, 'warn');
