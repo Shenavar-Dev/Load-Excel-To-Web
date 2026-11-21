@@ -2,7 +2,7 @@
 // @name         BTS Property Excel Assistant
 // @namespace    https://btsproperty.mtnirancell.ir/
 // @author       Ebrahim Shenavar | Irancell
-// @version      6.3.1
+// @version      6.3.2
 // @description  Flexible header-based Excel review and safe form population for BTS Property
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
 // @downloadURL  https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
@@ -12,8 +12,10 @@
 // ==/UserScript==
 
 /*
- * Version 6.3.1 (اصلاحات منطقی، چیدمان تنظیمات، تراز باکس‌ها و بهبود دکمه‌ها)
- * v6.3.1 changes:
+ * Version 6.3.2 (اصلاح لغو انتظار LL Name و حذف گزارش ستون‌های ناشناخته)
+ * v6.3.2 changes:
+ * - Fixed cancelActiveWait prematurely clearing state.cancelRequested so waitForLLName respects cancellation.
+ * - Removed unknownHeaders notice from checkHeaderDraft status message.
  * - Unified modal close behavior (requestClose(true)), guarded closeModal against double execution, and reset cancelRequested cleanly.
  * - Disabled Apply button when 0 fields are marked will-change; updated Calculate wait button label to "توقف پیگیری".
  * - Added Site ID missing-data guard before auto-search, unknown header detection in settings, and data-reason attribute on unmapped/no-data cells.
@@ -453,7 +455,6 @@
         state.searching = false;
         state.calculating = false;
         setBusy(false);
-        state.cancelRequested = false;
     }
 
     /** Runs an action and waits for its ASP.NET partial postback (cancellable). */
@@ -1939,19 +1940,15 @@
             }
             return;
         }
-        // v6.3.1: Include unknown header names notice in settings status if present
+        // v6.3.2: Keep settings status focused on the 36 main headers without listing unknown headers
         const dupCount = result.dupCount || 0;
-        const unknownList = result.unknownHeaders || [];
         settingsUi.saveButton.disabled = false;
         const summaryPrefix = faNum(result.mappedCount) + ' هدر از ' + faNum(WEB_FIELDS.length) + ' هدر شناسایی شد' +
             (result.missing > 0 ? ' (' + faNum(result.missing) + ' ستون فاقد هدر بررسی نخواهند شد)' : '');
-        const unknownNote = unknownList.length
-            ? '\nعنوان‌های ناشناخته (نادیده گرفته می‌شوند): ' + unknownList.slice(0, 8).join('، ') + (unknownList.length > 8 ? ' ...' : '')
-            : '';
         if (dupCount) {
-            setSettingsStatus(summaryPrefix + '؛ ' + faNum(dupCount) + ' هدر تکراری دارد (زرد در جدول) که اولین ستون استفاده می‌شود. برای ثبت، «ذخیره هدر» را بزنید.' + unknownNote, 'warn');
+            setSettingsStatus(summaryPrefix + '؛ ' + faNum(dupCount) + ' هدر تکراری دارد (زرد در جدول) که اولین ستون استفاده می‌شود. برای ثبت، «ذخیره هدر» را بزنید.', 'warn');
         } else {
-            setSettingsStatus(summaryPrefix + '؛ برای ثبت، «ذخیره هدر» را بزنید.' + unknownNote, unknownList.length ? 'warn' : 'ok');
+            setSettingsStatus(summaryPrefix + '؛ برای ثبت، «ذخیره هدر» را بزنید.', 'ok');
         }
     }
 
