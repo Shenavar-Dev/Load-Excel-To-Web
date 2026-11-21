@@ -10,15 +10,6 @@
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
-/*
- * Version 6.3.0 (هدر منعطف حداقل ۳ ستون، عدم توقف روی ردیف کوتاه و اصلاحات چیدمان)
- * v6.3.0 changes:
- * - Flexible header mapping: requires Site ID + Contract Type + at least 1 additional column (min 3 total).
- * - Non-blocking out-of-range row handling: marks missing headers and out-of-range cells clearly without halting.
- * - Empty cell status updated to explicit non-apply message; unmapped/missing-data fields remain visible in yellow under "فقط تغییرات".
- * - UI & layout refinements: soft-blue section headers, half-width Payment Comment, wider Phone Number,
- *   side-by-side Cancellation Date & Comment, larger left-aligned "فقط تغییرات" checkbox, and spaced footer buttons.
- */
 
 (function () {
     'use strict';
