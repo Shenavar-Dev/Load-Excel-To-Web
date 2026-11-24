@@ -2,8 +2,8 @@
 // @name         BTS Property Excel Assistant Deep
 // @namespace    https://btsproperty.mtnirancell.ir/
 // @author       Ebrahim Shenavar | Irancell
-// @version      6.5.4
-// @description  Inline panel safe Excel review and form population (v6.5.4)
+// @version      6.5.5
+// @description  safe Excel review and form population (v6.5.5)
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
 // @downloadURL  https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
 // @updateURL    https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
@@ -11,6 +11,15 @@
 // @run-at       document-idle
 // ==/UserScript==
 
+/*
+  * Version 6.5.5 (مدیریت خطاهای فرمول اکسل + کنترل چک‌باکس فیلدها در تنظیمات)
+ * v6.5.5 changes:
+ * - [تصفیه خطاهای اکسل] مقادیر حاوی خطاهای رایج فرمول اکسل (#N/A, #VALUE!, #REF!, #DIV/0!, #NAME?, #NULL!, #NUM!, #GETTING_DATA)
+ *   شناسایی شده و به عنوان سلول خالی در نظر گرفته می‌شوند تا داده‌های صحیح موجود در وب دست‌نخورده باقی بمانند.
+ * - [چک‌باکس فعال/غیرفعال فیلدها] در تنظیمات نگاشت هدر، امکان فعال/غیرفعال کردن هر یک از 36 فیلد (به‌جز فیلدهای الزامی Site ID و Contract Type)
+ *   فراهم شد. فیلدهای غیرفعال‌شده از بررسی هدر، نمایش در پنل اصلی، چیپ‌ها و فرایند اعمال کاملاً استثنا می‌شوند.
+ * - [ذخیره‌سازی وضعیت فیلدها] وضعیت فعال/غیرفعال بودن فیلدها در localStorage ذخیره و بازیابی می‌شود.
+ */
 
 (function () {
     'use strict';
@@ -68,6 +77,47 @@
     };
     const CALC_FIELD_KEYS = ['taxType', 'contractAmount', 'escalationType', 'escalation', 'llCount'];
     const HEADER_STORAGE_KEY = 'epf:bts-excel-paste:header-row:v1';
+    const DISABLED_FIELDS_STORAGE_KEY = 'epf:bts-excel-paste:disabled-fields:v1';
+
+    // Regex to match common Excel formula errors
+    const EXCEL_ERROR_PATTERN = /^#(N\/A|VALUE!|REF!|DIV\/0!|NAME\?|NULL!|NUM!|GETTING_DATA)$/i;
+
+    function cleanExcelCell(val) {
+        if (val == null) return '';
+        const str = String(val).trim();
+        if (EXCEL_ERROR_PATTERN.test(str)) {
+            return ''; // Treat Excel error string as empty so it won't overwrite web data
+        }
+        return str;
+    }
+
+    function loadStoredDisabledFields() {
+        try {
+            const json = window.localStorage.getItem(DISABLED_FIELDS_STORAGE_KEY);
+            if (!json) return new Set();
+            const arr = JSON.parse(json);
+            return new Set(Array.isArray(arr) ? arr : []);
+        } catch (e) {
+            return new Set();
+        }
+    }
+
+    function persistDisabledFields(disabledSet) {
+        try {
+            const arr = Array.from(disabledSet);
+            window.localStorage.setItem(DISABLED_FIELDS_STORAGE_KEY, JSON.stringify(arr));
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    let activeDisabledFields = loadStoredDisabledFields();
+
+    function isFieldEnabled(key) {
+        if (key === FIELD_KEYS.SITE_ID || key === FIELD_KEYS.CONTRACT_TYPE) return true;
+        return !activeDisabledFields.has(key);
+    }
 
     // Normalises a header cell for case- and space-insensitive matching.
     function normalizeHeader(value) {
@@ -95,8 +145,14 @@
         let missing = 0;
         let dupCount = 0;
         let mappedCount = 0;
+        let enabledCount = 0;
 
         WEB_FIELDS.forEach(field => {
+            if (!isFieldEnabled(field.key)) {
+                states[field.key] = { st: 'disabled', col: null };
+                return;
+            }
+            enabledCount += 1;
             const wanted = normalizeHeader(field.label);
             const matches = [];
             normalized.forEach((name, index) => {
@@ -117,26 +173,33 @@
         const hasContractType = Number.isInteger(columns[FIELD_KEYS.CONTRACT_TYPE]);
         const ready = hasSiteId && hasContractType && mappedCount >= 3;
 
-        return { parsed: true, ready, missing, mappedCount, hasSiteId, hasContractType, columns, states, dupCount };
+        return { parsed: true, ready, missing, mappedCount, enabledCount, hasSiteId, hasContractType, columns, states, dupCount };
     }
 
     // Identity mapping: default column order equals the field index.
     function defaultMapping() {
         const columns = Object.create(null);
         const states = Object.create(null);
+        let enabledCount = 0;
         WEB_FIELDS.forEach((field, index) => {
+            if (!isFieldEnabled(field.key)) {
+                states[field.key] = { st: 'disabled', col: null };
+                return;
+            }
+            enabledCount += 1;
             columns[field.key] = index;
             states[field.key] = { st: 'ok', col: index };
         });
-        return { parsed: true, ready: true, missing: 0, mappedCount: WEB_FIELDS.length, columns, states, dupCount: 0 };
+        return { parsed: true, ready: true, missing: 0, mappedCount: enabledCount, enabledCount, columns, states, dupCount: 0 };
     }
 
-    // True when every field sits on its default column (the 1..N order).
     function isDefaultMapping(mapping) {
-        return Boolean(mapping) && WEB_FIELDS.every((field, index) => mapping.columns[field.key] === index);
+        return Boolean(mapping) && WEB_FIELDS.every((field, index) => {
+            if (!isFieldEnabled(field.key)) return true;
+            return mapping.columns[field.key] === index;
+        });
     }
 
-    // Reads the saved header row from localStorage (empty when storage is unavailable).
     function loadStoredHeader() {
         try {
             const value = window.localStorage.getItem(HEADER_STORAGE_KEY);
@@ -147,7 +210,6 @@
         }
     }
 
-    // Saves the header row to localStorage; returns false when storage is blocked.
     function persistHeader(headerText) {
         try {
             window.localStorage.setItem(HEADER_STORAGE_KEY, headerText);
@@ -157,7 +219,7 @@
         }
     }
 
-    // Non-blocking extraction; tracks out-of-range mapped columns instead of aborting.
+    // Non-blocking extraction; cleans Excel formula errors and tracks out-of-range mapped columns.
     function extractValues(cells, mapping) {
         if (!mapping) {
             return { ok: false, message: 'ابتدا هدر اکسل را در «تنظیمات نگاشت هدر» ثبت کنید.' };
@@ -166,19 +228,19 @@
         const webValues = {};
         const outOfRange = Object.create(null);
         WEB_FIELDS.forEach(field => {
+            if (!isFieldEnabled(field.key)) return;
             const col = mapping.columns[field.key];
             if (!Number.isInteger(col)) return;
             if (col >= cells.length) {
                 outOfRange[field.key] = true;
                 return;
             }
-            const value = String(cells[col] == null ? '' : cells[col]);
+            const value = cleanExcelCell(cells[col]);
             webValues[field.key] = field.type === 'textarea' ? value : value.replace(/\n/g, ' ');
         });
         return { ok: true, webValues, outOfRange };
     }
 
-    // Parses Excel TSV text into rows, honouring quoted multi-line cells.
     function parseTSV(text) {
         const source = String(text || '').replace(/\r\n?/g, '\n').replace(/[\u2028\u2029]/g, '\n');
         const rows = [];
@@ -694,7 +756,7 @@
 
         #epf-toast {
             position: fixed; left: 24px; bottom: 20px; z-index: 10002; max-width: min(92vw, 540px); padding: 11px 15px;
-            border-radius: 9px; color: #fff; background: var(--pri); box-shadow: 0 6px 22px rgba(0,0,0,.2);
+            border-radius: 99px; color: #fff; background: var(--pri); box-shadow: 0 6px 22px rgba(0,0,0,.2);
             font-size: 12px; line-height: 1.75; direction: rtl; cursor: pointer; opacity: 0; transform: translateY(8px);
             pointer-events: none; transition: .2s ease;
         }
@@ -717,13 +779,17 @@
         .epf-hlegend .lg-abs { color: #9a7b0a; }
         .epf-hlegend .lg-chg { color: var(--ok); }
         .epf-hlegend .lg-def { color: #8a959b; }
+        .epf-hlegend .lg-dis { color: #8b979c; text-decoration: line-through; }
         .epf-hgrid-wrap { margin-top: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfc; }
         .epf-hgrid-site-row { display: flex; justify-content: center; margin-bottom: 8px; }
         .epf-hgrid-site-row .epf-hcell { width: min(260px, 100%); border-color: #b8dce8; background: #f2f9fc; }
         .epf-hgrid { direction: ltr; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
-        .epf-hcell { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; padding: 7px 9px;
+        .epf-hcell { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; padding: 6px 8px;
             border: 1px solid #e2e8ea; border-radius: 6px; background: #fff; font-size: 12.5px; }
+        .epf-hchk { width: 15px; height: 15px; accent-color: var(--pri); cursor: pointer; flex: 0 0 auto; margin: 0; }
+        .epf-hcell-left { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; }
         .epf-hname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 600; }
+        .epf-hname.epf-h-disabled { opacity: 0.55; text-decoration: line-through; color: #7f8c8d; }
         .epf-hcol { flex: 0 0 auto; min-width: 18px; text-align: center; font-weight: 800; font-size: 12.5px; color: #98a3a8; }
         .epf-hname.epf-h-missing, .epf-hcol.epf-h-missing { color: var(--bad); }
         .epf-hname.epf-h-dup, .epf-hcol.epf-h-dup { color: #c2570c; }
@@ -812,7 +878,7 @@
 
     const headerMain = makeElement('div');
     const subtitle = makeElement('p', 'epf-subtitle',
-        'ردیف داده را از اکسل در کادر زیر پیست کنید و «بررسی» را بزنید. فیلدهای بدون هدر یا بدون داده بررسی نمی‌شوند و خانهٔ خالی اعمال نمی‌شود. اگر فیلدی مؤثر در محاسبه تغییر کند، Calculate خودکار اجرا می‌شود.');
+        'ردیف داده را از اکسل در کادر زیر پیست کنید و «بررسی» را بزنید. فیلدهای بدون هدر یا بدون داده بررسی نمی‌شوند و خانهٔ خالی یا حاوی خطای اکسل اعمال نمی‌شود. اگر فیلدی مؤثر در محاسبه تغییر کند، Calculate خودکار اجرا می‌شود.');
     const mapNote = makeElement('div');
     mapNote.id = 'epf-map-note';
     mapNote.setAttribute('role', 'status');
@@ -918,7 +984,7 @@
     // ============================================================
 
     function isMapped(key) {
-        return Boolean(activeHeaderMapping && Number.isInteger(activeHeaderMapping.columns[key]));
+        return Boolean(isFieldEnabled(key) && activeHeaderMapping && Number.isInteger(activeHeaderMapping.columns[key]));
     }
 
     function isCancellationDateEnabled() {
@@ -1006,11 +1072,12 @@
         const field = FIELD_BY_KEY[key];
         const value = getVal(key);
         const isOut = Boolean(state.outOfRange && state.outOfRange[key]);
-        if (!state.parsed || !isMapped(key) || isOut) {
+        if (!isFieldEnabled(key) || !state.parsed || !isMapped(key) || isOut) {
             control.disabled = true;
             if (field.type === 'select') {
                 control.textContent = '';
-                const placeholderText = !state.parsed ? '(پس از بررسی)'
+                const placeholderText = !isFieldEnabled(key) ? '(غیرفعال)'
+                    : !state.parsed ? '(پس از بررسی)'
                     : !isMapped(key) ? '(هدر ندارد)' : '(داده ندارد)';
                 const option = makeElement('option', '', placeholderText);
                 option.value = '';
@@ -1100,18 +1167,23 @@
     function updateGroups() {
         const onlyChanges = onlyBox.checked;
         fieldsContainer.classList.toggle('epf-only-changes', onlyChanges);
-        const isVisibleInOnly = key => rows[key] && (rows[key].row.dataset.st === 'will-change' || rows[key].row.dataset.unmapped === '1');
+        const isVisibleInOnly = key => isFieldEnabled(key) && rows[key] && (rows[key].row.dataset.st === 'will-change' || rows[key].row.dataset.unmapped === '1');
         modalRowEls.forEach(item => {
-            item.el.hidden = onlyChanges && !item.keys.some(isVisibleInOnly);
+            const hasVisibleKeys = item.keys.some(k => isFieldEnabled(k) && (!onlyChanges || isVisibleInOnly(k)));
+            item.el.hidden = !hasVisibleKeys;
         });
         groupEls.forEach(group => {
-            const hasVisible = WEB_FIELDS.some(field => field.group === group.id && isVisibleInOnly(field.key));
-            group.el.hidden = onlyChanges && !hasVisible;
+            const hasVisible = WEB_FIELDS.some(field => field.group === group.id && isFieldEnabled(field.key) && (!onlyChanges || isVisibleInOnly(field.key)));
+            group.el.hidden = !hasVisible;
         });
     }
 
     function evaluateField(key) {
         const field = FIELD_BY_KEY[key];
+        if (!isFieldEnabled(key)) {
+            if (rows[key]) rows[key].row.hidden = true;
+            return 'disabled';
+        }
         if (!isMapped(key)) {
             setRowStatus(key, 'not-editable', 'هدر ندارد؛ بررسی نمی‌شود', null, 'no-header');
             return 'not-editable';
@@ -1230,7 +1302,14 @@
         }
 
         const counts = { 'will-change': 0, 'same': 0, 'not-editable': 0, 'invalid-select': 0 };
-        WEB_FIELDS.forEach(field => { counts[evaluateField(field.key)] += 1; });
+        WEB_FIELDS.forEach(field => {
+            if (!isFieldEnabled(field.key)) {
+                if (rows[field.key]) rows[field.key].row.hidden = true;
+                return;
+            }
+            const st = evaluateField(field.key);
+            if (st !== 'disabled' && counts[st] !== undefined) counts[st] += 1;
+        });
         updateChips(counts);
         updateGroups();
 
@@ -1238,7 +1317,7 @@
         updateApplyState();
 
         if (state.searching || state.calculating) return;
-        const invalidFields = WEB_FIELDS.filter(field => rows[field.key].row.dataset.st === 'invalid-select');
+        const invalidFields = WEB_FIELDS.filter(field => isFieldEnabled(field.key) && rows[field.key].row.dataset.st === 'invalid-select');
         let message = identity.message;
         let kind = identity.ok ? 'success' : 'error';
         if (invalidFields.length) {
@@ -1262,7 +1341,7 @@
     }
 
     // ============================================================
-    // 08. SITE ID SEARCH (v6.5.4 Update)
+    // 08. SITE ID SEARCH
     // ============================================================
     function siteIdMissing() {
         return Boolean(document.getElementById(SITE_INSERT_INPUT_ID) || document.getElementById('Content_Site'));
@@ -1323,7 +1402,7 @@
 
     function updateApplyState() {
         const busy = state.searching || state.calculating;
-        const hasChanges = WEB_FIELDS.some(field => rows[field.key] && rows[field.key].row.dataset.st === 'will-change');
+        const hasChanges = WEB_FIELDS.some(field => isFieldEnabled(field.key) && rows[field.key] && rows[field.key].row.dataset.st === 'will-change');
         applyButton.disabled = busy || !state.parsed || isPasteStale() || !hasChanges || !validateIdentity().ok;
     }
 
@@ -1569,7 +1648,7 @@
         let cancellationLetterPreApplied = false;
 
         const cancellationField = FIELD_BY_KEY.cancellationLetter;
-        if (isCancellationDateEnabled() && evaluateField(cancellationField.key) === 'will-change') {
+        if (isFieldEnabled(cancellationField.key) && isCancellationDateEnabled() && evaluateField(cancellationField.key) === 'will-change') {
             try {
                 const cancellationResult = applyOneField(cancellationField, getVal(cancellationField.key));
                 if (cancellationResult.applied) {
@@ -1587,7 +1666,7 @@
 
         let escalationPreApplied = false;
         const escalationField = FIELD_BY_KEY[FIELD_KEYS.ESCALATION_TYPE];
-        if (evaluateField(escalationField.key) === 'will-change') {
+        if (isFieldEnabled(escalationField.key) && evaluateField(escalationField.key) === 'will-change') {
             const pre = await seatEscalationTypeForApply(escalationField);
             if (pre.aborted) return;
             if (pre.applied) {
@@ -1599,6 +1678,7 @@
         }
 
         WEB_FIELDS.forEach(field => {
+            if (!isFieldEnabled(field.key)) return;
             if (field.key === 'cancellationLetter' && cancellationLetterPreApplied) return;
             if (field.key === FIELD_KEYS.ESCALATION_TYPE && escalationPreApplied) return;
             const status = evaluateField(field.key);
@@ -1787,6 +1867,7 @@
         if (normalize(pasted) === '') return;
 
         const field = FIELD_BY_KEY[FIELD_KEYS.ESCALATION_TYPE];
+        if (!isFieldEnabled(field.key)) return;
         const info = targetInfo(field);
         if (!info.exists || !info.typeMatches || !info.editable) return;
         if (fieldSat(field, pasted)) return;
@@ -1835,7 +1916,7 @@
     }
 
     // ============================================================
-    // 12. HEADER MAPPING SETTINGS
+    // 12. HEADER MAPPING SETTINGS & FIELD TOGGLES
     // ============================================================
     const settingsUi = {
         built: false,
@@ -1847,7 +1928,8 @@
         statusBox: null,
         grid: null,
         dupLegendEl: null,
-        saveButton: null
+        saveButton: null,
+        fieldCheckboxes: {}
     };
 
     function setSettingsStatus(text, kind) {
@@ -1872,14 +1954,35 @@
         updateDupLegendCount(dupCount);
 
         WEB_FIELDS.forEach((field, index) => {
-            const st = result && result.states ? result.states[field.key] : { st: 'ok', col: index };
+            const isEnabled = isFieldEnabled(field.key);
+            const st = result && result.states ? result.states[field.key] : { st: isEnabled ? 'ok' : 'disabled', col: isEnabled ? index : null };
             const cell = makeElement('div', 'epf-hcell');
             cell.title = field.label;
+
+            const leftBox = makeElement('div', 'epf-hcell-left');
+            const chk = makeElement('input', 'epf-hchk');
+            chk.type = 'checkbox';
+            chk.checked = isEnabled;
+            chk.dataset.key = field.key;
+            if (field.key === FIELD_KEYS.SITE_ID || field.key === FIELD_KEYS.CONTRACT_TYPE) {
+                chk.disabled = true;
+                chk.title = 'فیلد الزامی هویتی (غیرقابل تغییر)';
+            }
+            chk.addEventListener('change', () => {
+                if (chk.checked) activeDisabledFields.delete(field.key);
+                else activeDisabledFields.add(field.key);
+                onHeaderDraftChanged();
+            });
+            settingsUi.fieldCheckboxes[field.key] = chk;
 
             const name = makeElement('span', 'epf-hname', field.label);
             const col = makeElement('span', 'epf-hcol');
 
-            if (st.st === 'missing') {
+            if (!isEnabled || st.st === 'disabled') {
+                name.classList.add('epf-h-disabled');
+                col.textContent = '✕';
+                col.classList.add('epf-h-disabled');
+            } else if (st.st === 'missing') {
                 const missingClass = REQUIRED_HEADER_KEYS.includes(field.key) ? 'epf-h-missing' : 'epf-h-absent';
                 name.classList.add(missingClass);
                 col.textContent = '—';
@@ -1893,7 +1996,8 @@
                 if (st.col !== index) col.classList.add('epf-h-changed');
             }
 
-            cell.append(name, col);
+            leftBox.append(chk, name);
+            cell.append(leftBox, col);
             if (field.key === FIELD_KEYS.SITE_ID) {
                 settingsUi.siteRow.appendChild(cell);
             } else {
@@ -1909,7 +2013,7 @@
         settingsUi.checkedText = null;
         settingsUi.saveButton.disabled = true;
         renderHeaderGrid(null);
-        setSettingsStatus('متن هدر تغییر کرده است؛ برای بررسی، «بررسی هدر» را بزنید.', 'info');
+        setSettingsStatus('تنظیمات یا متن هدر تغییر کرده است؛ برای بررسی، «بررسی هدر» را بزنید.', 'info');
     }
 
     function checkHeaderDraft() {
@@ -1942,14 +2046,14 @@
             if (missingReq.length) {
                 setSettingsStatus('هدر الزامی یافت نشد: ' + missingReq.join(' و ') + '؛ وجود هر دو هدر Site ID و Contract Type به‌همراه دست‌کم یک هدر دیگر الزامی است.', 'err');
             } else {
-                setSettingsStatus('حداقل ۳ هدر شناخته‌شده لازم است (Site ID، Contract Type و دست‌کم یک هدر دیگر)؛ فعلاً ' + faNum(result.mappedCount) + ' هدر شناسایی شد.', 'err');
+                setSettingsStatus('حداقل ۳ هدر شناخته‌شده فعال لازم است (Site ID، Contract Type و دست‌کم یک هدر دیگر)؛ فعلاً ' + faNum(result.mappedCount) + ' هدر شناسایی شد.', 'err');
             }
             return;
         }
         const dupCount = result.dupCount || 0;
         settingsUi.saveButton.disabled = false;
-        let summary = faNum(result.mappedCount) + ' فیلد از ' + faNum(WEB_FIELDS.length) + ' فیلد شناسایی شد';
-        if (result.missing > 0) summary += `؛ ${faNum(result.missing)} فیلد بدون هدر (زرد) بررسی نمی‌شوند`;
+        let summary = faNum(result.mappedCount) + ' فیلد از ' + faNum(result.enabledCount) + ' فیلد فعال شناسایی شد';
+        if (result.missing > 0) summary += `؛ ${faNum(result.missing)} فیلد فعال بدون هدر (زرد) بررسی نمی‌شوند`;
         if (dupCount) {
             setSettingsStatus(summary + `؛ ${faNum(dupCount)} هدر تکراری است (نارنجی) و اولین ستون آن استفاده می‌شود. برای ثبت، «ذخیره هدر» را بزنید.`, 'warn');
         } else {
@@ -1958,6 +2062,7 @@
     }
 
     function resetHeaderDraft() {
+        activeDisabledFields.clear();
         settingsUi.headerArea.value = '';
         settingsUi.dirty = true;
         settingsUi.defaultDraft = true;
@@ -1965,7 +2070,7 @@
         settingsUi.checkedText = '';
         settingsUi.saveButton.disabled = false;
         renderHeaderGrid(settingsUi.lastResult);
-        setSettingsStatus('حالت پیش‌فرض (ستون‌های ۱ تا ' + faNum(WEB_FIELDS.length) + ') آماده است؛ برای فعال‌سازی، «ذخیره هدر» را بزنید.', 'info');
+        setSettingsStatus('حالت پیش‌فرض (همه ۳۶ فیلد فعال، ستون‌های ۱ تا ۳۶) آماده است؛ برای فعال‌سازی، «ذخیره هدر» را بزنید.', 'info');
     }
 
     async function pasteHeaderFromClipboard() {
@@ -1993,8 +2098,8 @@
 
         const intro = makeElement('p', 'epf-settings-intro',
             'ردیف عنوان ستون‌های اکسل (Header) را کپی کنید، با دکمهٔ «پیست» در کادر زیر بریزید و «بررسی هدر» را بزنید. ' +
-            'هدر Site ID و Contract Type به‌همراه دست‌کم یک هدر دیگر الزامی است (حداقل ۳ هدر از ' + faNum(WEB_FIELDS.length) + ' هدر)؛ ' +
-            'بقیه اختیاری‌اند. فیلدِ بدون هدر زرد می‌شود و هنگام بررسی نادیده گرفته می‌شود. ' +
+            'هدر Site ID و Contract Type به‌همراه دست‌کم یک هدر دیگر الزامی است (حداقل ۳ هدر). ' +
+            'تیکِ فیلدهایی که نیازی به آن‌ها ندارید را بردارید تا کلاً در پنل مخفی شده و بررسی نشوند. ' +
             'تطبیق نام‌ها به حروف بزرگ و کوچک و فاصلهٔ اضافی حساس نیست.');
 
         const label = makeElement('label', 'epf-paste-label', 'ردیف هدر اکسل');
@@ -2028,6 +2133,7 @@
         legend.appendChild(makeElement('span', 'lg-abs', 'زرد: بدون هدر؛ بررسی نمی‌شود'));
         settingsUi.dupLegendEl = makeElement('span', 'lg-dup', 'نارنجی: هدر تکراری (اولین ستون استفاده می‌شود)');
         legend.appendChild(settingsUi.dupLegendEl);
+        legend.appendChild(makeElement('span', 'lg-dis', 'خط‌خورده: غیرفعال شده توسط کاربر'));
         legend.appendChild(makeElement('span', 'lg-miss', 'قرمز: هدر الزامی یافت نشد'));
 
         const gridWrap = makeElement('div', 'epf-hgrid-wrap');
@@ -2083,7 +2189,7 @@
             settingsUi.lastResult = result;
             settingsUi.checkedText = activeHeaderText;
             renderHeaderGrid(result);
-            setSettingsStatus('هدر ثبت‌شده فعلی نمایش داده می‌شود؛ برای تغییر، هدر جدید را پیست کنید.', 'info');
+            setSettingsStatus('هدر ثبت‌شده فعلی نمایش داده می‌شود؛ برای تغییر، هدر یا چک‌باکس‌های فیلدها را تغییر دهید.', 'info');
             settingsUi.saveButton.disabled = false;
         } else {
             settingsUi.lastResult = null;
@@ -2144,6 +2250,8 @@
             result = settingsUi.lastResult;
         }
 
+        persistDisabledFields(activeDisabledFields);
+
         activeHeaderText = text;
         activeHeaderMapping = { columns: result.columns };
         const stored = persistHeader(activeHeaderText);
@@ -2161,9 +2269,9 @@
         updateMapNote();
         reviewButton.disabled = false;
         pasteArea.focus();
-        const savedCount = result.mappedCount || WEB_FIELDS.length;
-        showMainMessage('هدر ذخیره شد؛ ' + faNum(savedCount) + ' فیلد از ' + faNum(WEB_FIELDS.length) + ' فیلد نگاشت شد' +
-            (stored ? ' و در حافظهٔ مرورگر ماند.' : '؛ ذخیرهٔ دائمی ممکن نیست و هدر فقط تا پایان این نشست فعال است.'), stored ? 'success' : 'warning');
+        const savedCount = result.mappedCount || result.enabledCount;
+        showMainMessage('هدر و تنظیمات فیلدها ذخیره شد؛ ' + faNum(savedCount) + ' فیلد از ' + faNum(result.enabledCount) + ' فیلد فعال نگاشت شد' +
+            (stored ? ' و در حافظهٔ مرورگر ماند.' : '؛ ذخیرهٔ دائمی ممکن نیست و تنظیمات فقط تا پایان این نشست فعال است.'), stored ? 'success' : 'warning');
     }
 
     // ============================================================
