@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         BTS Property Excel Assistant
+// @name         BTS Property Excel Assistant Deep
 // @namespace    https://btsproperty.mtnirancell.ir/
 // @author       Ebrahim Shenavar | Irancell
-// @version      6.3.3
-// @description  Flexible header-based Excel review and safe form population for BTS Property
+// @version      6.5.4
+// @description  Inline panel safe Excel review and form population (v6.5.4)
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
 // @downloadURL  https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
 // @updateURL    https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
@@ -11,22 +11,6 @@
 // @run-at       document-idle
 // ==/UserScript==
 
-/*
- * Version 6.3.3 (بر پایه 6.3.2 — قانون Calculate، اعمال دو مرحله‌ای Escalation، یکدست‌سازی متن‌ها و رنگ‌ها)
- * v6.3.3 changes:
- * - Calculate: when the row has no usable amount (no header / no data / empty cell) the live form amount is used;
- *   if neither is valid, the result toast says "Calculate not run" instead of staying silent.
- * - Apply: Escalation Type is seated first (it triggers a postback) so Escalation % can open before it is
- *   evaluated and applied. Cancel / timeout / error stops Apply with a clear message.
- * - Apply is disabled while the paste box differs from the reviewed text (prevents applying stale data).
- * - Header grid colours now match the main modal: yellow = no header (not checked), orange = duplicate,
- *   red = required header missing (Site ID / Contract Type only).
- * - Footer chip renamed "غیرقابل بررسی" with a tooltip covering all its causes (no header, no data, not editable).
- * - Persian wording pass: correct half-spaces ("نمی‌شود"), no space before punctuation, no dash-joined clauses,
- *   messages aligned with the event they describe; short English comments above every function.
- * - Cleanup: removed dead code (unknownHeaders, cellCount, unreachable empty-select branch).
- * - Unchanged: header rules (min 3, Site ID + Contract Type), search flow, Contract change flow, cancel handling.
- */
 
 (function () {
     'use strict';
@@ -95,18 +79,15 @@
         return String(value).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[digit]);
     }
 
-    // Headers that must exist for a header row to be accepted (others are optional)
     const REQUIRED_HEADER_KEYS = [FIELD_KEYS.SITE_ID, FIELD_KEYS.CONTRACT_TYPE];
 
-    // v6.3.0: Flexible header mapping (requires Site ID, Contract Type, and >= 3 mapped columns total)
-    /** Maps available fields to their Excel columns and validates minimum required headers. */
+    // Maps available fields to their Excel columns and validates minimum required headers.
     function buildHeaderMapping(headerText) {
         const parsedRows = parseTSV(headerText);
         if (!parsedRows.length || parsedRows.length > 1) {
             return { parsed: false, ready: false, missing: 0, mappedCount: 0 };
         }
 
-        // Normalised header cells of the single registered row
         const normalized = parsedRows[0].map(normalizeHeader);
 
         const columns = Object.create(null);
@@ -136,20 +117,10 @@
         const hasContractType = Number.isInteger(columns[FIELD_KEYS.CONTRACT_TYPE]);
         const ready = hasSiteId && hasContractType && mappedCount >= 3;
 
-        return {
-            parsed: true,
-            ready,
-            missing,
-            mappedCount,
-            hasSiteId,
-            hasContractType,
-            columns,
-            states,
-            dupCount
-        };
+        return { parsed: true, ready, missing, mappedCount, hasSiteId, hasContractType, columns, states, dupCount };
     }
 
-    /** Identity mapping: default column order equals the field index. */
+    // Identity mapping: default column order equals the field index.
     function defaultMapping() {
         const columns = Object.create(null);
         const states = Object.create(null);
@@ -160,7 +131,7 @@
         return { parsed: true, ready: true, missing: 0, mappedCount: WEB_FIELDS.length, columns, states, dupCount: 0 };
     }
 
-    /** True when every field sits on its default column (the 1..N order). */
+    // True when every field sits on its default column (the 1..N order).
     function isDefaultMapping(mapping) {
         return Boolean(mapping) && WEB_FIELDS.every((field, index) => mapping.columns[field.key] === index);
     }
@@ -186,7 +157,7 @@
         }
     }
 
-    // v6.3.0: Non-blocking extraction; tracks out-of-range mapped columns instead of aborting
+    // Non-blocking extraction; tracks out-of-range mapped columns instead of aborting.
     function extractValues(cells, mapping) {
         if (!mapping) {
             return { ok: false, message: 'ابتدا هدر اکسل را در «تنظیمات نگاشت هدر» ثبت کنید.' };
@@ -246,7 +217,6 @@
         { id: 'status', title: 'وضعیت و توضیحات' }
     ];
 
-    // v6.3.0: Updated visual grid layout (Cancellation Date & Comment side-by-side)
     const MODAL_ROWS = [
         { id: 'identity', rows: [{ fields: ['siteId', 'contractType'], facing: true }, { fields: ['llName', 'ownerType'], facing: true }] },
         { id: 'dates', rows: [{ fields: ['startDate', 'endDate'], facing: true }] },
@@ -276,7 +246,7 @@
 
     const state = {
         webValues: {},
-        outOfRange: {}, // v6.3.0: Tracks mapped keys whose Excel column index exceeds pasted row cells
+        outOfRange: {},
         parsed: false,
         reviewedText: '',
         searchConfirmed: false,
@@ -291,7 +261,6 @@
         cancelRequested: false
     };
 
-    // Returns the reviewed value of a field key ('' when absent).
     function getVal(key) {
         const value = state.webValues[key];
         return value === undefined ? '' : value;
@@ -306,6 +275,7 @@
     let ctBox = null;
     let ctBtn = null;
     let ctMsg = null;
+    let headerBtn = null;
 
     // ============================================================
     // 02. TEXT & DOM UTILITIES
@@ -315,12 +285,10 @@
         return s.replace(/\u064A/g, '\u06CC').replace(/\u0643/g, '\u06A9');
     }
 
-    // Light normalisation (letters unified, trimmed, lower-cased) for comparisons.
     function normalize(value) {
         return fixChars(String(value == null ? '' : value)).trim().toLowerCase();
     }
 
-    // Strict normalisation (no spaces or ZWNJ) used as a second matching pass.
     function normalizeStrong(value) {
         return fixChars(String(value == null ? '' : value))
             .replace(/\u200c/g, '')
@@ -329,7 +297,6 @@
             .toLowerCase();
     }
 
-    // Whitespace-insensitive form of a text for equality checks.
     function looseText(value) {
         return fixChars(String(value == null ? '' : value))
             .replace(/[\u200e\u200f]/g, '')
@@ -338,12 +305,10 @@
             .toLowerCase();
     }
 
-    // Removes thousands separators from an amount.
     function stripCommas(value) {
         return String(value == null ? '' : value).replace(/,/g, '').trim();
     }
 
-    // Creates an element with an optional class and text.
     function makeElement(tagName, className, text) {
         const el = document.createElement(tagName);
         if (className) el.className = className;
@@ -351,14 +316,12 @@
         return el;
     }
 
-    // True when a form control cannot be edited.
     function isElementDisabled(el) {
         if (!el) return true;
         return Boolean(el.disabled || el.readOnly ||
             (typeof el.matches === 'function' && el.matches(':disabled')));
     }
 
-    // Returns the ASP.NET PageRequestManager when the page provides it.
     function getPRM() {
         try {
             const w = window.Sys && window.Sys.WebForms;
@@ -368,7 +331,6 @@
         }
     }
 
-    // Looks up a web field's element and reports whether it is usable.
     function targetInfo(field) {
         const el = field.id ? document.getElementById(field.id) : null;
         if (!el) return { element: null, exists: false, typeMatches: false, editable: false };
@@ -383,7 +345,6 @@
         return { element: el, exists: true, typeMatches: true, editable: !isElementDisabled(el) };
     }
 
-    // Finds an enabled option by value or text (loose match).
     function findSelectableOption(selectEl, value) {
         if (!selectEl || selectEl.tagName.toLowerCase() !== 'select') return null;
         const wanted = normalize(value);
@@ -407,7 +368,6 @@
         return match || null;
     }
 
-    // Finds an enabled option by its visible text only.
     function findOptionByText(selectEl, value) {
         if (!selectEl || selectEl.tagName.toLowerCase() !== 'select') return null;
         const options = Array.from(selectEl.options || []).filter(o => !o.disabled);
@@ -418,7 +378,6 @@
         return options.find(o => normalizeStrong(o.textContent) === ws) || null;
     }
 
-    // Visible text of the selected option.
     function selectedOptionText(selectEl) {
         if (!selectEl || selectEl.tagName.toLowerCase() !== 'select') return '';
         const selected = selectEl.selectedOptions && selectEl.selectedOptions.length
@@ -427,7 +386,6 @@
         return selected ? String(selected.textContent || '').trim() : '';
     }
 
-    // Value currently shown on the live form for a field.
     function getCurrentFormValue(field) {
         const info = targetInfo(field);
         if (!info.exists || !info.typeMatches) return '';
@@ -437,7 +395,6 @@
         return String(info.element.value || '').trim();
     }
 
-    // v6.3.3: Calculate needs a usable amount: the row amount if present, otherwise the live form amount
     function resolveCalcAmount() {
         const rowAmount = stripCommas(getVal(FIELD_KEYS.AMOUNT));
         if (rowAmount) {
@@ -450,7 +407,6 @@
         return { source: 'form', valid: formAmount !== '' && !isNaN(n) && n > 0 };
     }
 
-    // True when the live form already holds the given value.
     function fieldSat(field, pastedValue) {
         const info = targetInfo(field);
         if (!info.exists || !info.typeMatches) return false;
@@ -471,8 +427,6 @@
 
     let activeWait = null;
 
-    /** Releases the wait in progress; read-only waits (search) also abort their request. */
-    // v6.3.1: Cancel active wait and reset cancelRequested flag cleanly
     function cancelActiveWait() {
         state.cancelRequested = true;
         if (activeWait) activeWait.cancel();
@@ -481,7 +435,6 @@
         setBusy(false);
     }
 
-    /** Runs an action and waits for its ASP.NET partial postback (cancellable). */
     function runAndWait(action, startMs, maxMs, onSlow, options) {
         const opts = options || {};
         return new Promise(resolve => {
@@ -516,14 +469,14 @@
                 clearTimeout(slowTimer);
                 clearTimeout(maxTimer);
                 if (activeWait === handle) activeWait = null;
-                try { prm.remove_beginRequest(onBegin); } catch (error) { /* ignore */ }
-                try { prm.remove_endRequest(onEnd); } catch (error) { /* ignore */ }
+                try { prm.remove_beginRequest(onBegin); } catch (error) { }
+                try { prm.remove_endRequest(onEnd); } catch (error) { }
                 setTimeout(() => resolve(result), 150);
             };
             const handle = {
                 cancel: () => {
                     if (opts.abortOnCancel) {
-                        try { if (prm.get_isInAsyncPostBack()) prm.abortPostBack(); } catch (error) { /* ignore */ }
+                        try { if (prm.get_isInAsyncPostBack()) prm.abortPostBack(); } catch (error) { }
                     }
                     finish({ started, error: null, cancelled: true });
                 }
@@ -555,7 +508,7 @@
     }
 
     // ============================================================
-    // 04. STYLES & MODAL STRUCTURE
+    // 04. STYLES
     // ============================================================
 
     const styleElement = makeElement('style');
@@ -565,34 +518,54 @@
         #epf-root {
             --pri: #004E5B; --pri-d: #003D47; --acc: #F4C300; --ink: #243238; --mut: #5e6d73;
             --line: #dbe2e5; --ok: #218838; --warn: #9a7b0a; --bad: #c82333;
+            --header-height: 64px; --topmenu-height: 56px;
             font-family: Irancell, Tahoma, sans-serif; direction: rtl;
         }
         #epf-root [hidden] { display: none !important; }
         #epf-root button, #epf-root input, #epf-root select, #epf-root textarea { font-family: inherit; }
         .swal2-container { z-index: 20000 !important; }
-        #epf-fab {
-            position: fixed; left: 24px; bottom: 80px; z-index: 9998; display: inline-flex;
-            align-items: center; justify-content: center; gap: 10px; min-height: 52px; padding: 0 22px;
-            border: 0; border-radius: 50px; background: linear-gradient(135deg, #F4C300, #ffd84d);
-            color: var(--pri); font-size: 15px; font-weight: 700; box-shadow: 0 5px 18px rgba(244,195,0,.38);
-            cursor: pointer; transition: transform .18s ease, box-shadow .18s ease;
+
+        /* Header button injected as a <li> inside #topmenuNav */
+        #epfMenuLink { list-style: none; display: inline-flex; align-items: center; }
+        #epf-header-btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+            padding: 7px 14px; border: 1px solid #b8dce8; border-radius: 8px;
+            background: #e6f3f8; color: var(--pri);
+            font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+            transition: background .15s ease, box-shadow .15s ease;
+            direction: rtl; text-decoration: none;
         }
-        #epf-fab:hover { transform: translateY(-3px) scale(1.035); box-shadow: 0 8px 22px rgba(244,195,0,.48); }
-        #epf-fab:focus-visible, #epf-root button:focus-visible, #epf-root input:focus-visible,
-        #epf-root select:focus-visible, #epf-root textarea:focus-visible { outline: 2px solid var(--pri); outline-offset: 2px; }
-        .epf-fab-icon { font-size: 19px; line-height: 1; }
+        #epf-header-btn:hover { background: #d4ebf4; color: var(--pri); }
+        #epf-header-btn:focus-visible { outline: 2px solid var(--pri); outline-offset: 2px; }
+        #epf-header-btn[aria-expanded="true"] { background: #c6e8f4; font-weight: 700; }
+        #epf-header-btn .link-text { font-size: 13px; font-weight: 700; }
+        #epf-header-btn i { font-size: 13px; line-height: 1; }
+
+        /* Inline panel (not floating) — max-width 1020px */
         #epf-overlay {
-            position: fixed; inset: 0; z-index: 10001; display: none; align-items: center; justify-content: center;
-            padding: 16px; background: rgba(30,25,21,.55); backdrop-filter: blur(4px);
+            display: none;
+            width: 100%;
+            max-width: 1020px;
+            margin: 8px auto 14px;
+            overflow: hidden;
+            direction: rtl;
+            opacity: 0;
+            transition: opacity .22s ease;
+            scroll-margin-top: calc(var(--header-height, 64px) + var(--topmenu-height, 56px) + 20px);
         }
-        #epf-overlay.epf-open { display: flex; }
-        /* v6.3.1: Slightly taller modal while staying safely inside browser viewport */
+        #epf-overlay.epf-open {
+            display: block;
+            opacity: 1;
+        }
+        #epf-overlay.epf-closing {
+            opacity: 0;
+        }
         #epf-modal {
-            width: min(96vw, 1060px); height: min(95vh, 960px); max-height: 95vh; display: flex;
-            flex-direction: column; overflow: hidden; background: #fff; color: var(--ink); border-radius: 14px;
-            box-shadow: 0 18px 60px rgba(0,0,0,.28); direction: rtl; animation: epf-enter .2s ease-out;
+            width: 100%; display: flex; flex-direction: column;
+            background: #fff; color: var(--ink); border-radius: 12px;
+            border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0,0,0,.08);
+            direction: rtl; overflow: hidden;
         }
-        @keyframes epf-enter { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
         .epf-header { position: relative; flex: 0 0 auto; padding: 10px 16px 9px; background: var(--pri); color: #fff; }
         .epf-header-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
         .epf-title-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -634,13 +607,13 @@
         .epf-btn-primary { color: var(--pri); background: var(--acc); }
         .epf-btn-apply { color: #fff; background: var(--ok); }
         .epf-btn-secondary { color: #45545a; background: #e9edef; }
-        /* v6.3.1: Soft red cancel button style and auto-width top-left reset button */
         .epf-btn-cancel { color: #842029; background: #f8d7da; border: 1px solid #f1aeb5; }
         .epf-btn-cancel:hover:not(:disabled) { background: #f1c2c7; }
+        .epf-btn-goto-save { color: #fff; background: var(--pri); border: 1px solid var(--pri-d); }
+        .epf-btn-goto-save:hover:not(:disabled) { background: var(--pri-d); }
         .epf-btn-reset { width: auto; padding: 5px 12px; font-size: 11px; color: var(--pri); background: #e6f3f8; border: 1px solid #b8dce8; }
         .epf-btn-reset:hover:not(:disabled) { background: #d4ebf4; }
-        .epf-content { flex: 1 1 auto; min-height: 0; padding: 10px 14px; overflow: auto; overscroll-behavior: contain; }
-        /* v6.3.1: Centered main status message */
+        .epf-content { flex: 1 1 auto; min-height: 0; padding: 10px 14px; overflow: visible; }
         #epf-main-message { display: none; margin: 0 0 8px; padding: 6px 12px; border-radius: 7px; font-size: 11.5px; line-height: 1.65; white-space: pre-wrap; text-align: center; }
         #epf-main-message.epf-show { display: block; }
         .epf-msg-error { color: #842029; background: #f8d7da; border: 1px solid #f5c6cb; }
@@ -650,12 +623,10 @@
         #epf-fields { display: block; }
         .epf-section { margin-top: 9px; padding: 0 9px 9px; overflow: hidden; border: 1px solid #cce3eb; border-radius: 8px; background: #fdfefe; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
         .epf-section:first-child { margin-top: 0; }
-        /* v6.3.0: Soft blue section header to avoid visual conflict with yellow status boxes */
         .epf-section-title { margin: 0 -9px 7px; padding: 4px 10px; text-align: center; font-size: 12px; font-weight: 700; color: var(--pri);
             background: #e6f3f8; border-bottom: 1px solid #c3dfe9; }
         .epf-mrow { display: flex; direction: ltr; gap: 7px; }
         .epf-mrow + .epf-mrow { margin-top: 6px; }
-        /* v6.3.1: CSS variable --w for responsive cell sizing, plus left-aligned input boxes stretching to end of div */
         .epf-fcell { --w: 1 1 0; flex: var(--w); min-width: 0; display: flex; direction: ltr; gap: 6px; align-items: flex-start; padding: 5px 8px;
             border: 1px solid var(--line); border-radius: 7px; background: #fff; }
         .epf-mrow.epf-facing .epf-fcell { --w: 1 1 0; }
@@ -669,7 +640,6 @@
         .epf-fcell[data-st="same"] { background: #f4f6f7; border-color: #d8dedf; }
         .epf-fcell[data-st="not-editable"] { background: #fffbeb; border-color: #f0d78c; }
         .epf-fcell[data-st="invalid-select"] { background: #fff4f4; border-color: #efb7bd; }
-        /* v6.3.0: Keep unmapped/missing-data yellow cells visible even in only-changes mode */
         #epf-fields.epf-only-changes .epf-fcell:not([data-st="will-change"]):not([data-unmapped="1"]) { display: none; }
         .epf-flabel { flex: 0 0 auto; max-width: 44%; min-width: 78px; padding-top: 5px; direction: ltr; text-align: left; color: #34464d;
             font-size: 11.5px; font-weight: 700; overflow-wrap: anywhere; }
@@ -699,11 +669,18 @@
         .epf-ct-info { color: #7a5b00; }
         .epf-ct-bad { color: var(--bad); }
         .epf-ct-ok { color: var(--ok); font-weight: 700; }
-        .epf-footer { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 7px 12px 9px; border-top: 1px solid #e8edef; background: #fbfcfc; }
-        /* v6.3.1: Centered settings footer buttons */
-        .epf-settings-footer { direction: rtl; display: flex; justify-content: center; align-items: center; gap: 14px; }
+
+        /* Sticky footer keeps Apply/Cancel always reachable */
+        .epf-footer {
+            position: sticky; bottom: 0; z-index: 2;
+            display: flex; flex-direction: column; gap: 6px;
+            padding: 7px 12px 9px;
+            border-top: 1px solid #e8edef; background: #fbfcfc;
+            box-shadow: 0 -2px 6px rgba(0,0,0,.04);
+        }
+        .epf-settings-footer { direction: rtl; display: flex; flex-direction: row; justify-content: center; align-items: center; gap: 14px; flex-wrap: wrap; }
         .epf-settings-footer .epf-btn { min-width: 140px; min-height: 36px; padding: 6px 16px; }
-        /* v6.3.0: Spaced footer actions and larger left-aligned only-changes checkbox */
+        .epf-settings-footer .epf-btn-reset { min-width: 120px; }
         .epf-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-inline-end: 16px; }
         .epf-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 20px; background: #edf0f1; color: #536168; font-size: 10.5px; white-space: nowrap; }
         .epf-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #9aa5aa; }
@@ -714,6 +691,7 @@
         .epf-only { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: var(--ink); white-space: nowrap; margin-inline-start: auto; cursor: pointer; }
         .epf-only input { width: 17px; height: 17px; accent-color: var(--pri); cursor: pointer; }
         .epf-footer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; width: 100%; }
+
         #epf-toast {
             position: fixed; left: 24px; bottom: 20px; z-index: 10002; max-width: min(92vw, 540px); padding: 11px 15px;
             border-radius: 9px; color: #fff; background: var(--pri); box-shadow: 0 6px 22px rgba(0,0,0,.2);
@@ -722,8 +700,8 @@
         }
         #epf-toast.epf-toast-show { opacity: 1; transform: translateY(0); pointer-events: auto; }
         .epf-filled { background-color: #e8f5e9 !important; border-color: #28a745 !important; }
-        /* v6.3.1: Larger settings intro text, centered Site ID row, and 5x7 grid with larger font */
-        .epf-settings { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+        .epf-settings { flex: 1 1 auto; min-height: 0; overflow: visible; }
         .epf-settings-topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
         .epf-settings-intro { margin: 0 0 8px; font-size: 13px; line-height: 1.85; color: #36464d; text-align: right; }
         .epf-settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 8px; direction: ltr; align-items: stretch; }
@@ -757,6 +735,7 @@
         .epf-box-warn { color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
         .epf-box-info { color: #174b58; background: #e8f1f3; }
         .epf-box-ok { color: #155724; background: #d4edda; }
+
         #epf-confirm-overlay { position: fixed; inset: 0; z-index: 10005; display: none; align-items: center; justify-content: center;
             padding: 16px; background: rgba(30,25,21,.45); }
         #epf-confirm-overlay.epf-open { display: flex; }
@@ -765,9 +744,9 @@
         .epf-confirm-msg { margin: 0 0 14px; font-size: 12px; line-height: 1.85; }
         .epf-confirm-actions { display: flex; justify-content: center; gap: 10px; }
         .epf-confirm-actions .epf-btn { min-width: 130px; }
+
         @media (max-width: 768px) {
-            #epf-modal { width: 98vw; height: 95vh; max-height: 95vh; }
-            .epf-header { padding: 8px 10px; }
+            #epf-header-btn { padding: 6px 10px; font-size: 12px; gap: 4px; }
             .epf-content { padding: 8px; }
             .epf-mrow { flex-wrap: wrap; }
             .epf-fcell { --w: 1 1 100% !important; flex: 1 1 100% !important; max-width: 100% !important; }
@@ -786,23 +765,17 @@
             .epf-chip { font-size: 9.5px; padding: 2px 5px; }
             .epf-chip-count { font-size: 12.5px; }
         }
-        @media (prefers-reduced-motion: reduce) { #epf-modal, #epf-fab, #epf-toast, .epf-fcell { animation: none; transition: none; } }
+        @media (prefers-reduced-motion: reduce) {
+            #epf-overlay { transition: none; }
+            #epf-header-btn, .epf-fcell { transition: none; }
+        }
     `;
 
     // ============================================================
-    // 05. MODAL UI
+    // 05. INLINE PANEL UI
     // ============================================================
     const root = makeElement('div');
     root.id = 'epf-root';
-
-    const fab = makeElement('button');
-    fab.id = 'epf-fab';
-    fab.type = 'button';
-    fab.setAttribute('aria-haspopup', 'dialog');
-    fab.setAttribute('aria-controls', 'epf-modal');
-    const fabIcon = makeElement('span', 'epf-fab-icon', '▤');
-    fabIcon.setAttribute('aria-hidden', 'true');
-    fab.append(fabIcon, makeElement('span', '', 'انتقال از Excel'));
 
     const overlay = makeElement('div');
     overlay.id = 'epf-overlay';
@@ -810,8 +783,7 @@
 
     const modal = makeElement('section');
     modal.id = 'epf-modal';
-    modal.setAttribute('role', 'dialog');
-    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('role', 'region');
     modal.setAttribute('aria-labelledby', 'epf-title');
 
     const header = makeElement('div', 'epf-header');
@@ -828,15 +800,10 @@
     headerIdentity.id = 'epf-identity';
     headerIdentity.setAttribute('role', 'status');
 
-    // v6.3.1: Top-left auto-width reset button shown in settings header opposite to close button
-    const topResetBtn = makeElement('button', 'epf-btn epf-btn-reset', 'بازگشت به پیش‌فرض');
-    topResetBtn.type = 'button';
-    topResetBtn.hidden = true;
-
     const closeMainBtn = makeElement('button', 'epf-xbtn', '✕');
     closeMainBtn.id = 'epf-x-main';
     closeMainBtn.type = 'button';
-    closeMainBtn.setAttribute('aria-label', 'بستن پنجره');
+    closeMainBtn.setAttribute('aria-label', 'بستن پنل');
     const closeSettingsBtn = makeElement('button', 'epf-xbtn', '✕');
     closeSettingsBtn.id = 'epf-x-settings';
     closeSettingsBtn.type = 'button';
@@ -871,7 +838,7 @@
     headerMain.append(subtitle, mapNote, pasteLayout, pasteWarning);
     const titleWrap = makeElement('div', 'epf-title-wrap');
     titleWrap.append(closeMainBtn, closeSettingsBtn, title);
-    headerTop.append(titleWrap, headerIdentity, gearBtn, topResetBtn);
+    headerTop.append(titleWrap, headerIdentity, gearBtn);
     header.append(headerTop, headerMain);
 
     const content = makeElement('div', 'epf-content');
@@ -885,7 +852,6 @@
 
     const footer = makeElement('div', 'epf-footer');
     const chipsBox = makeElement('div', 'epf-chips');
-    // v6.3.3: Chip labels match their real meaning; the tooltip lists every cause of the yellow chip
     const CHIP_DEFS = [
         { key: 'will-change', label: 'تغییر', hint: 'فیلدهایی که مقدارشان روی فرم تغییر می‌کند' },
         { key: 'same', label: 'یکسان', hint: 'مقدار ردیف با فرم برابر است یا خانهٔ ردیف خالی است' },
@@ -908,9 +874,12 @@
     const applyButton = makeElement('button', 'epf-btn epf-btn-apply', 'اعمال در فرم وب');
     applyButton.type = 'button';
     applyButton.disabled = true;
+    const gotoSaveButton = makeElement('button', 'epf-btn epf-btn-goto-save', '⬇️ رفتن به دکمه ذخیره');
+    gotoSaveButton.type = 'button';
+    gotoSaveButton.id = 'epf-goto-save';
     const cancelButton = makeElement('button', 'epf-btn epf-btn-cancel', 'انصراف');
     cancelButton.type = 'button';
-    footerActions.append(chipsBox, onlyLabel, applyButton, cancelButton);
+    footerActions.append(chipsBox, onlyLabel, applyButton, gotoSaveButton, cancelButton);
     footer.append(footerActions);
 
     const settingsView = makeElement('div', 'epf-content epf-settings');
@@ -919,7 +888,7 @@
     settingsFooter.hidden = true;
     modal.append(header, content, settingsView, footer, settingsFooter);
     overlay.appendChild(modal);
-    root.append(fab, overlay);
+    root.appendChild(overlay);
 
     const toast = makeElement('div');
     toast.id = 'epf-toast';
@@ -952,7 +921,6 @@
         return Boolean(activeHeaderMapping && Number.isInteger(activeHeaderMapping.columns[key]));
     }
 
-    // True when Cancellation Letter is Yes (row or form), so the date box is usable.
     function isCancellationDateEnabled() {
         if (String(getVal('cancellationLetter')).trim().toUpperCase() === 'YES') return true;
         const info = targetInfo(FIELD_BY_KEY.cancellationLetter);
@@ -960,7 +928,6 @@
             String(info.element.value || '').trim().toUpperCase() === 'YES');
     }
 
-    /** Creates the field review controls once per page session. */
     function buildRows() {
         if (built) return;
         built = true;
@@ -1033,13 +1000,11 @@
         WEB_FIELDS.forEach(field => syncControl(field.key));
     }
 
-    // Mirrors a reviewed value into its modal control.
     function syncControl(key) {
         const control = controls[key];
         if (!control) return;
         const field = FIELD_BY_KEY[key];
         const value = getVal(key);
-        // v6.3.0: Disable control cleanly when header is missing or Excel cell is out of range
         const isOut = Boolean(state.outOfRange && state.outOfRange[key]);
         if (!state.parsed || !isMapped(key) || isOut) {
             control.disabled = true;
@@ -1081,7 +1046,6 @@
         control.disabled = false;
     }
 
-    // Refreshes every dropdown control from the live page options.
     function syncAllSelects() {
         WEB_FIELDS.forEach(field => {
             if (field.type === 'select') syncControl(field.key);
@@ -1100,13 +1064,11 @@
         mainMessage.className = 'epf-show ' + className;
     }
 
-    // Hides the main status message.
     function clearMainMessage() {
         mainMessage.textContent = '';
         mainMessage.className = '';
     }
 
-    // v6.3.1: Track data-reason (no-header / no-data / other) alongside statusType
     function setRowStatus(key, statusType, message, currentText, reason) {
         const item = rows[key];
         if (!item) return;
@@ -1129,14 +1091,12 @@
         }
     }
 
-    // Updates the footer status counters.
     function updateChips(counts) {
         chips.forEach(chip => {
             chip.count.textContent = state.parsed && counts ? String(counts[chip.key] || 0) : '0';
         });
     }
 
-    // v6.3.0: Keep rows/groups visible if they contain will-change OR unmapped/missing-data yellow fields
     function updateGroups() {
         const onlyChanges = onlyBox.checked;
         fieldsContainer.classList.toggle('epf-only-changes', onlyChanges);
@@ -1150,8 +1110,6 @@
         });
     }
 
-    // v6.3.0: Explicit messages for missing header, out-of-range cell, and empty cell
-    /** Compares a reviewed value with the live form and assigns its status. */
     function evaluateField(key) {
         const field = FIELD_BY_KEY[key];
         if (!isMapped(key)) {
@@ -1182,7 +1140,6 @@
                 return 'not-editable';
             }
             if (!info.editable) {
-                // v6.3.3: Escalation % opens only after Escalation Type is applied, so say so instead of "not editable"
                 const typeRow = rows[FIELD_KEYS.ESCALATION_TYPE];
                 if (key === 'escalation' && typeRow && typeRow.row.dataset.st === 'will-change') {
                     setRowStatus(key, 'not-editable', 'پس از اعمال Escalation Type باز می‌شود و همان‌جا اعمال خواهد شد', null, 'deferred');
@@ -1197,7 +1154,6 @@
         if (field.type === 'select') {
             option = findSelectableOption(info.element, pasted);
             if (!option) {
-                // (empty cells are already handled above, so a missing option always means an invalid value)
                 setRowStatus(key, 'invalid-select', 'مقدار در گزینه‌های سایت وجود ندارد؛ اعمال نمی‌شود');
                 return 'invalid-select';
             }
@@ -1217,7 +1173,6 @@
         return 'will-change';
     }
 
-    /** Prevents applying a row to a different site or contract. */
     function validateIdentity() {
         const siteInfo = targetInfo(FIELD_BY_KEY[FIELD_KEYS.SITE_ID]);
         const contractInfo = targetInfo(FIELD_BY_KEY[FIELD_KEYS.CONTRACT_TYPE]);
@@ -1257,7 +1212,6 @@
         return result;
     }
 
-    /** True when the reviewed Contract Type differs from the live form (invalid dropdowns may belong to the other contract). */
     function contractDiffersFromForm() {
         const info = targetInfo(FIELD_BY_KEY[FIELD_KEYS.CONTRACT_TYPE]);
         if (!info.exists || !info.typeMatches) return false;
@@ -1265,7 +1219,6 @@
         return Boolean(pasted) && pasted !== normalize(selectedOptionText(info.element));
     }
 
-    // Re-evaluates all fields, counters, Apply state and the main message.
     function refreshAll() {
         if (!built) return;
         syncControl('cancellationDate');
@@ -1281,7 +1234,6 @@
         updateChips(counts);
         updateGroups();
 
-        // v6.3.1: Disable Apply button when identity fails OR 0 fields will change
         const identity = validateIdentity();
         updateApplyState();
 
@@ -1310,34 +1262,12 @@
     }
 
     // ============================================================
-    // 08. SITE ID SEARCH
+    // 08. SITE ID SEARCH (v6.5.4 Update)
     // ============================================================
-    function getLLNameValue() {
-        const element = document.getElementById(LL_NAME_ID);
-        return element ? String(element.value || '').trim() : '';
-    }
-
-    // Polls until LL Name is filled (stops on cancel or timeout).
-    function waitForLLName(maxMs, intervalMs, previousValue, requireChange = false) {
-        return new Promise(resolve => {
-            const start = Date.now();
-            const check = () => {
-                if (state.cancelRequested) { resolve(false); return; }
-                const current = getLLNameValue();
-                if (current && (!requireChange || current !== previousValue)) { resolve(true); return; }
-                if (Date.now() - start >= maxMs) { resolve(false); return; }
-                setTimeout(check, intervalMs);
-            };
-            check();
-        });
-    }
-
-    /** True when the page answered with the new-site form instead of site data. */
     function siteIdMissing() {
-        return Boolean(document.getElementById(SITE_INSERT_INPUT_ID));
+        return Boolean(document.getElementById(SITE_INSERT_INPUT_ID) || document.getElementById('Content_Site'));
     }
 
-    /** Searches the site and separates found / missing / timeout outcomes. */
     async function performAutoSearch(siteId) {
         const siteInput = document.getElementById(SITE_ID_INPUT_ID);
         const searchButton = document.getElementById(SEARCH_BTN_ID);
@@ -1345,7 +1275,6 @@
             return { ok: false, reason: 'فیلد Site ID یا دکمه جستجو در صفحه پیدا نشد.', kind: 'error' };
         }
 
-        const previousLLName = getLLNameValue();
         siteInput.value = siteId;
         siteInput.dispatchEvent(new Event('input', { bubbles: true }));
         siteInput.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1373,25 +1302,16 @@
             return { ok: false, reason: 'این Site ID در سامانه ثبت نشده است؛ فرم ثبت سایت جدید نمایش داده شده است.', kind: 'error' };
         }
 
-        const found = result.started === true
-            ? await waitForLLName(1500, 300)
-            : await waitForLLName(8000, 500, previousLLName, true);
-        if (state.cancelRequested) return cancelledResult;
-        if (!found) {
-            return { ok: false, reason: 'پاسخ جستجو دریافت شد اما LL Name پر نشد؛ وضعیت صفحه را بررسی کنید.', kind: 'error' };
-        }
         return { ok: true, reason: '', kind: 'info' };
     }
 
     // ============================================================
     // 09. CLIPBOARD & ROW REVIEW
     // ============================================================
-    /** True when the paste box no longer matches the text that was reviewed. */
     function isPasteStale() {
         return state.parsed && pasteArea.value !== state.reviewedText;
     }
 
-    // v6.3.3: Stale paste text also disables Apply (previously it only warned)
     function updatePasteRevisionWarning() {
         const changed = isPasteStale();
         pasteWarning.textContent = changed
@@ -1401,14 +1321,12 @@
         if (built) updateApplyState();
     }
 
-    /** Single source of truth for the Apply button state. */
     function updateApplyState() {
         const busy = state.searching || state.calculating;
         const hasChanges = WEB_FIELDS.some(field => rows[field.key] && rows[field.key].row.dataset.st === 'will-change');
         applyButton.disabled = busy || !state.parsed || isPasteStale() || !hasChanges || !validateIdentity().ok;
     }
 
-    // v6.3.1: Distinct label "توقف پیگیری" during Calculate and disable Apply when 0 changes exist
     function setBusy(busy) {
         pasteButton.disabled = busy;
         reviewButton.disabled = busy || !activeHeaderMapping;
@@ -1420,7 +1338,6 @@
         updateApplyState();
     }
 
-    // Clears the review state and returns every field to its idle look.
     function resetParsedData() {
         state.webValues = {};
         state.outOfRange = {};
@@ -1442,7 +1359,6 @@
         updatePasteRevisionWarning();
     }
 
-    /** Extracts the required fields from the current paste-box snapshot. */
     function processPastedText(raw) {
         if (!activeHeaderMapping) {
             return { ok: false, message: 'ابتدا هدر اکسل را در «تنظیمات نگاشت هدر» ثبت کنید.' };
@@ -1462,7 +1378,6 @@
         return { ok: true, webValues: extraction.webValues, outOfRange: extraction.outOfRange, rowWarning, colWarning };
     }
 
-    /** Copies clipboard text into the input box without reviewing it. */
     async function pasteFromClipboard() {
         if (state.searching || state.calculating) return;
         if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
@@ -1483,7 +1398,6 @@
         }
     }
 
-    /** Reviews only the text currently present in the paste box. */
     async function reviewPastedRow() {
         if (state.searching || state.calculating) return;
         if (!activeHeaderMapping) {
@@ -1515,7 +1429,6 @@
         updatePasteRevisionWarning();
         refreshAll();
 
-        // v6.3.1: Stop cleanly before search if Site ID cell is missing or empty
         const siteIdValue = String(getVal(FIELD_KEYS.SITE_ID)).trim();
         if (!siteIdValue) {
             state.searchConfirmed = false;
@@ -1557,7 +1470,6 @@
         el.dispatchEvent(new Event('blur', opts));
     }
 
-    // Writes one value into the live form control (events are dispatched by the caller).
     function applyOneField(field, value) {
         const info = targetInfo(field);
         const forceEditable = field.key === 'cancellationDate' && isCancellationDateEnabled();
@@ -1585,11 +1497,9 @@
         return { applied: true, element: info.element, field };
     }
 
-    /** Closes the modal and reports the whole apply run in one toast. */
     function finishApply(changedCount, skippedInvalid, calcState, failedApply, calcSource) {
-        closeModal(true);
+        closeAndReset();
 
-        // Order: result, Calculate outcome, problems, then the "not saved" reminder
         const shortList = items => items.slice(0, 6).join('، ') +
             (items.length > 6 ? ` و ${faNum(items.length - 6)} مورد دیگر` : '');
         let summary = `انتقال تمام شد: ${faNum(changedCount)} فیلد تغییر کرد.`;
@@ -1610,7 +1520,6 @@
         clearMainMessage();
     }
 
-    /** Applies Escalation Type and waits for its postback; Apply continues only if the page confirmed it. */
     async function seatEscalationTypeForApply(field) {
         const result = applyOneField(field, getVal(field.key));
         if (!result.applied) return { applied: false, aborted: false };
@@ -1639,7 +1548,6 @@
         return { applied: true, aborted: false, item: result };
     }
 
-    /** Applies the last reviewed values and runs Calculate when required. */
     async function applyAllFields() {
         if (state.searching || state.calculating) return;
         if (isPasteStale()) {
@@ -1677,7 +1585,6 @@
             syncAllSelects();
         }
 
-        // v6.3.3: Seat Escalation Type first (it posts back) so Escalation % can open before it is evaluated
         let escalationPreApplied = false;
         const escalationField = FIELD_BY_KEY[FIELD_KEYS.ESCALATION_TYPE];
         if (evaluateField(escalationField.key) === 'will-change') {
@@ -1722,12 +1629,10 @@
             }
         });
 
-        // Calculate only runs when a calculation-related field changed
         if (greenCalcKeys.length === 0) {
             finishApply(changedCount, skippedInvalid, 'none', failedApply);
             return;
         }
-        // ...and only with a usable amount; otherwise say so instead of staying silent
         const calcAmount = resolveCalcAmount();
         if (!calcAmount.valid) {
             finishApply(changedCount, skippedInvalid, 'no-amount', failedApply);
@@ -1789,14 +1694,12 @@
         return ctBox;
     }
 
-    // Sets the small status line under the Contract button.
     function setCtMsg(text, kind) {
         if (!ctMsg) return;
         ctMsg.textContent = text || '';
         ctMsg.className = 'epf-ct-msg' + (kind ? ' epf-ct-' + kind : '');
     }
 
-    // Hides and resets the Contract change box.
     function resetContractFix() {
         if (!ctBox) return;
         ctBox.hidden = true;
@@ -1805,7 +1708,6 @@
         setCtMsg('');
     }
 
-    // Shows the Contract button when the reviewed contract differs from the form.
     function renderContractFix() {
         if (!ctBox) return;
         if (state.contractChangeCompleted) {
@@ -1836,7 +1738,6 @@
         }
     }
 
-    /** Applies the pasted Contract Type; the page handles it locally without a postback. */
     async function applyContractChange() {
         const info = targetInfo(FIELD_BY_KEY[FIELD_KEYS.CONTRACT_TYPE]);
         if (!info.exists || !info.typeMatches) return;
@@ -1869,7 +1770,6 @@
         await seatEscalationTypeAfterContract();
     }
 
-    /** Flags a completed contract change and refreshes the modal identity line. */
     function markContractChanged(contractText) {
         state.contractChangeCompleted = true;
         state.headerContract = contractText || '';
@@ -1881,7 +1781,6 @@
         }, 8000);
     }
 
-    /** Sets Escalation Type after the Contract Type postback completes. */
     async function seatEscalationTypeAfterContract() {
         if (!state.parsed) return;
         const pasted = getVal(FIELD_KEYS.ESCALATION_TYPE);
@@ -1928,7 +1827,6 @@
         }
         syncAllSelects();
         refreshAll();
-        // Report what really happened: the % box opens only for some Escalation Type values
         const percentInfo = targetInfo(FIELD_BY_KEY.escalation);
         const percentOpen = percentInfo.exists && percentInfo.editable;
         setCtMsg(percentOpen
@@ -1952,7 +1850,6 @@
         saveButton: null
     };
 
-    // Shows a message in the settings panel.
     function setSettingsStatus(text, kind) {
         const box = settingsUi.statusBox;
         if (!box) return;
@@ -1960,7 +1857,6 @@
         box.className = text ? 'epf-box epf-show epf-box-' + (kind || 'info') : 'epf-box';
     }
 
-    /** Updates duplicate header count dynamically inside the legend text. */
     function updateDupLegendCount(dupCount) {
         if (!settingsUi.dupLegendEl) return;
         const countStr = Number.isInteger(dupCount) && dupCount > 0
@@ -1968,8 +1864,6 @@
         settingsUi.dupLegendEl.textContent = 'نارنجی: هدر تکراری' + countStr;
     }
 
-    // v6.3.1: Render Site ID centered on top row and remaining 35 fields in a 5x7 grid
-    /** Renders the header grid; a null result shows the default grey state. */
     function renderHeaderGrid(result) {
         if (!settingsUi.grid || !settingsUi.siteRow) return;
         settingsUi.siteRow.textContent = '';
@@ -1986,7 +1880,6 @@
             const col = makeElement('span', 'epf-hcol');
 
             if (st.st === 'missing') {
-                // v6.3.3: only the mandatory headers are errors (red); other absent headers are just "not checked" (yellow)
                 const missingClass = REQUIRED_HEADER_KEYS.includes(field.key) ? 'epf-h-missing' : 'epf-h-absent';
                 name.classList.add(missingClass);
                 col.textContent = '—';
@@ -2009,7 +1902,6 @@
         });
     }
 
-    /** Resets the draft grid state after the header text changes. */
     function onHeaderDraftChanged() {
         settingsUi.dirty = true;
         settingsUi.defaultDraft = false;
@@ -2020,7 +1912,6 @@
         setSettingsStatus('متن هدر تغییر کرده است؛ برای بررسی، «بررسی هدر» را بزنید.', 'info');
     }
 
-    /** Validates the current header draft and updates the grid colors. */
     function checkHeaderDraft() {
         const raw = settingsUi.headerArea.value;
         if (!raw.trim()) {
@@ -2038,7 +1929,6 @@
         settingsUi.checkedText = raw;
         renderHeaderGrid(result.parsed ? result : null);
 
-        // v6.3.0: Validate minimum 3 mapped headers including Site ID and Contract Type
         if (!result.parsed) {
             settingsUi.saveButton.disabled = true;
             setSettingsStatus('فقط یک ردیف هدر باید ثبت شود؛ ردیف‌های اضافی را حذف کنید.', 'err');
@@ -2056,7 +1946,6 @@
             }
             return;
         }
-        // v6.3.3: Summary wording matches the grid colours (yellow = not checked, orange = duplicate)
         const dupCount = result.dupCount || 0;
         settingsUi.saveButton.disabled = false;
         let summary = faNum(result.mappedCount) + ' فیلد از ' + faNum(WEB_FIELDS.length) + ' فیلد شناسایی شد';
@@ -2068,7 +1957,6 @@
         }
     }
 
-    /** Puts the panel back on the default 1..36 column order. */
     function resetHeaderDraft() {
         settingsUi.headerArea.value = '';
         settingsUi.dirty = true;
@@ -2080,7 +1968,6 @@
         setSettingsStatus('حالت پیش‌فرض (ستون‌های ۱ تا ' + faNum(WEB_FIELDS.length) + ') آماده است؛ برای فعال‌سازی، «ذخیره هدر» را بزنید.', 'info');
     }
 
-    /** Copies clipboard text into the header box without checking it. */
     async function pasteHeaderFromClipboard() {
         if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
             setSettingsStatus('خواندن مستقیم Clipboard در این مرورگر در دسترس نیست؛ با Ctrl+V داخل کادر پیست کنید.', 'warn');
@@ -2100,14 +1987,12 @@
         }
     }
 
-    /** Builds the header registration panel. */
     function buildSettings() {
         if (settingsUi.built) return;
         settingsUi.built = true;
 
-        // v6.3.0: Updated settings guide reflecting flexible >=3 column rule
         const intro = makeElement('p', 'epf-settings-intro',
-                        'ردیف عنوان ستون‌های اکسل (Header) را کپی کنید، با دکمهٔ «پیست» در کادر زیر بریزید و «بررسی هدر» را بزنید. ' +
+            'ردیف عنوان ستون‌های اکسل (Header) را کپی کنید، با دکمهٔ «پیست» در کادر زیر بریزید و «بررسی هدر» را بزنید. ' +
             'هدر Site ID و Contract Type به‌همراه دست‌کم یک هدر دیگر الزامی است (حداقل ۳ هدر از ' + faNum(WEB_FIELDS.length) + ' هدر)؛ ' +
             'بقیه اختیاری‌اند. فیلدِ بدون هدر زرد می‌شود و هنگام بررسی نادیده گرفته می‌شود. ' +
             'تطبیق نام‌ها به حروف بزرگ و کوچک و فاصلهٔ اضافی حساس نیست.');
@@ -2138,7 +2023,6 @@
 
         const legend = makeElement('div', 'epf-hlegend');
         legend.appendChild(makeElement('span', 'lg-title', 'راهنمای جدول:'));
-        // v6.3.3: Legend colours mirror the main modal (yellow = not checked) and the grid below
         legend.appendChild(makeElement('span', 'lg-def', 'خاکستری: ستون پیش‌فرض'));
         legend.appendChild(makeElement('span', 'lg-chg', 'سبز: شمارهٔ ستون تغییر کرده'));
         legend.appendChild(makeElement('span', 'lg-abs', 'زرد: بدون هدر؛ بررسی نمی‌شود'));
@@ -2146,7 +2030,6 @@
         legend.appendChild(settingsUi.dupLegendEl);
         legend.appendChild(makeElement('span', 'lg-miss', 'قرمز: هدر الزامی یافت نشد'));
 
-        // v6.3.1: Wrapper with Site ID centered row on top + 5x7 grid below; top-left reset button; centered footer buttons
         const gridWrap = makeElement('div', 'epf-hgrid-wrap');
         settingsUi.siteRow = makeElement('div', 'epf-hgrid-site-row');
         settingsUi.grid = makeElement('div', 'epf-hgrid');
@@ -2154,19 +2037,20 @@
 
         settingsView.append(intro, label, layout, settingsUi.statusBox, legend, gridWrap);
 
-        topResetBtn.addEventListener('click', resetHeaderDraft);
+        const resetButton = makeElement('button', 'epf-btn epf-btn-reset', 'بازگشت به پیش‌فرض');
+        resetButton.type = 'button';
+        resetButton.addEventListener('click', resetHeaderDraft);
 
         const saveButton = makeElement('button', 'epf-btn epf-btn-apply', 'ذخیره هدر');
         saveButton.type = 'button';
         saveButton.addEventListener('click', saveHeaderSettings);
-        const cancelButton = makeElement('button', 'epf-btn epf-btn-cancel', 'انصراف');
-        cancelButton.type = 'button';
-        cancelButton.addEventListener('click', leaveSettings);
+        const cancelButton2 = makeElement('button', 'epf-btn epf-btn-cancel', 'انصراف');
+        cancelButton2.type = 'button';
+        cancelButton2.addEventListener('click', leaveSettings);
         settingsUi.saveButton = saveButton;
-        settingsFooter.append(saveButton, cancelButton);
+        settingsFooter.append(resetButton, cancelButton2, saveButton);
     }
 
-    /** Shows under the settings button whether the header mapping is default or customised. */
     function updateGearState() {
         let mode = 'none';
         let text = 'ثبت نشده';
@@ -2178,7 +2062,6 @@
         gearState.textContent = text;
     }
 
-    // Shows setup/storage notes above the paste box and enables Review.
     function updateMapNote() {
         const lines = [];
         if (initNote) lines.push(initNote);
@@ -2188,7 +2071,6 @@
         reviewButton.disabled = !activeHeaderMapping || state.searching || state.calculating;
     }
 
-    // Opens the header-mapping settings view.
     function openSettings() {
         if (state.searching || state.calculating || state.settingsOpen) return;
         buildSettings();
@@ -2217,18 +2099,14 @@
         closeMainBtn.hidden = true;
         closeSettingsBtn.hidden = false;
         headerIdentity.hidden = true;
-        topResetBtn.hidden = false;
-        header.classList.add('epf-in-settings');
         content.hidden = true;
         footer.hidden = true;
         settingsView.hidden = false;
         settingsFooter.hidden = false;
         title.textContent = 'تنظیمات نگاشت هدر';
-        settingsView.scrollTop = 0;
         settingsUi.headerArea.focus();
     }
 
-    // Returns from settings to the main view.
     function hideSettings() {
         state.settingsOpen = false;
         settingsView.hidden = true;
@@ -2238,19 +2116,16 @@
         closeMainBtn.hidden = false;
         closeSettingsBtn.hidden = true;
         headerIdentity.hidden = false;
-        topResetBtn.hidden = true;
-        header.classList.remove('epf-in-settings');
         content.hidden = false;
         footer.hidden = false;
         title.textContent = 'انتقال اطلاعات Excel به فرم BTS Property';
         updateMapNote();
     }
 
-    // Leaves settings, asking first when there are unsaved changes.
     async function leaveSettings() {
         if (!state.settingsOpen || state.confirmOpen) return;
         if (settingsUi.dirty) {
-            const leave = await askConfirm('تغییرات ذخیره‌نشده حذف می‌شود. به پنجره اصلی برگردیم؟', 'برگشت بدون ذخیره', 'ماندن در تنظیمات');
+            const leave = await askConfirm('تغییرات ذخیره‌نشده حذف می‌شود. به پنل اصلی برگردیم؟', 'برگشت بدون ذخیره', 'ماندن در تنظیمات');
             if (!leave) return;
         }
         hideSettings();
@@ -2258,7 +2133,6 @@
         gearBtn.focus();
     }
 
-    /** Validates and stores the registered Excel header row. */
     function saveHeaderSettings() {
         let text = settingsUi.headerArea.value;
         let result;
@@ -2293,36 +2167,100 @@
     }
 
     // ============================================================
-    // 13. MODAL LIFECYCLE
+    // 13. PANEL LIFECYCLE (inline)
     // ============================================================
-    function openModal() {
-        buildRows();
+    function showPanel() {
+        if (state.isOpen) return;
+        if (state.settingsOpen) hideSettings();
         state.isOpen = true;
+        overlay.classList.remove('epf-closing');
         overlay.classList.add('epf-open');
         overlay.setAttribute('aria-hidden', 'false');
-        updateMapNote();
-        refreshAll();
-        setTimeout(() => pasteArea.focus(), 40);
+        if (headerBtn) headerBtn.setAttribute('aria-expanded', 'true');
+
+        if (state.parsed) {
+            syncAllSelects();
+            refreshAll();
+            renderContractFix();
+        }
+
+        requestAnimationFrame(() => {
+            const offsetPx = 64 + 56 + 20;
+            try {
+                overlay.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } catch (e) {
+                try {
+                    window.scrollTo({ top: overlay.offsetTop - offsetPx, behavior: 'smooth' });
+                } catch (e2) { }
+            }
+        });
+        setTimeout(() => { try { pasteArea.focus({ preventScroll: true }); } catch (e) { } }, 80);
     }
 
-    // v6.3.1: Guard against duplicate closeModal calls and reset cancelRequested
-    function closeModal(force) {
+    function hidePanel(animate) {
         if (!state.isOpen) return;
-        if (!force && (state.calculating || state.searching)) return;
-        state.searching = false;
-        state.calculating = false;
-        state.cancelRequested = false;
-        if (state.settingsOpen) hideSettings();
         state.isOpen = false;
-        overlay.classList.remove('epf-open');
         overlay.setAttribute('aria-hidden', 'true');
+        if (headerBtn) headerBtn.setAttribute('aria-expanded', 'false');
+        if (animate === false) {
+            overlay.classList.remove('epf-open', 'epf-closing');
+            return;
+        }
+        overlay.classList.add('epf-closing');
+        setTimeout(() => {
+            if (!state.isOpen) {
+                overlay.classList.remove('epf-open', 'epf-closing');
+            }
+        }, 200);
+    }
+
+    function closeAndReset() {
+        if (!state.isOpen) return;
+        if (state.searching || state.calculating) {
+            state.searching = false;
+            state.calculating = false;
+            state.cancelRequested = false;
+        }
+        if (state.settingsOpen) hideSettings();
+        hidePanel();
         pasteArea.value = '';
         resetParsedData();
         clearMainMessage();
-        fab.focus();
+        if (headerBtn) headerBtn.focus();
     }
 
-    // Resolves when no search/calculation is running (or after a timeout).
+    function togglePanel() {
+        if (state.isOpen) {
+            hidePanel();
+        } else {
+            showPanel();
+        }
+    }
+
+    function scrollToSaveButton() {
+        const saveBtn = document.getElementById('Content_btn_Save');
+        if (!saveBtn) {
+            showToast('دکمه ذخیره در این صفحه پیدا نشد.', 4000);
+            return;
+        }
+        try {
+            saveBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } catch (e) {
+            const offsetPx = window.innerHeight / 2;
+            try {
+                window.scrollTo({ top: saveBtn.offsetTop - offsetPx, behavior: 'smooth' });
+            } catch (e2) { }
+        }
+        const prevOutline = saveBtn.style.outline;
+        const prevOutlineOffset = saveBtn.style.outlineOffset;
+        saveBtn.style.outline = '3px solid #ff8c00';
+        saveBtn.style.outlineOffset = '2px';
+        setTimeout(() => {
+            saveBtn.style.outline = prevOutline;
+            saveBtn.style.outlineOffset = prevOutlineOffset;
+        }, 1500);
+    }
+
     function waitUntilIdle(maxMs) {
         return new Promise(resolve => {
             const start = Date.now();
@@ -2334,26 +2272,24 @@
         });
     }
 
-    /** Closes the modal; while the page is busy it asks, cancels the wait and then closes. */
-    async function requestClose(confirmParsed) {
+    async function requestCancelAndClose() {
         if (state.confirmOpen) return;
         if (state.searching || state.calculating) {
-            const leave = await askConfirm('عملیات هنوز در انتظار پاسخ سامانه است. انتظار لغو شود و پنجره بسته شود؟ وضعیت فرم را بعداً بررسی کنید.', 'لغو و بستن', 'ادامه انتظار');
+            const leave = await askConfirm('عملیات هنوز در انتظار پاسخ سامانه است. انتظار لغو شود و پنل بسته شود؟ وضعیت فرم را بعداً بررسی کنید.', 'لغو و بستن', 'ادامه انتظار');
             if (!leave) return;
             cancelActiveWait();
             await waitUntilIdle(1500);
-            closeModal(true);
+            closeAndReset();
             return;
         }
-        if (confirmParsed && state.parsed) {
-            const ok = await askConfirm('اطلاعات بررسی‌شده پاک می‌شود. پنجره بسته شود؟', 'بستن پنجره', 'ماندن');
+        if (state.parsed) {
+            const ok = await askConfirm('اطلاعات بررسی‌شده پاک می‌شود. پنل بسته شود؟', 'بستن پنل', 'ماندن');
             if (!ok) return;
         }
-        closeModal(true);
+        closeAndReset();
     }
 
     let toastTimer = null;
-    // Shows a short floating message.
     function showToast(message, duration) {
         toast.textContent = message;
         toast.classList.add('epf-toast-show');
@@ -2361,7 +2297,6 @@
         toastTimer = setTimeout(() => toast.classList.remove('epf-toast-show'), duration || 8000);
     }
 
-    /** Small in-page confirmation dialog shown instead of the browser prompt. */
     function askConfirm(message, okLabel, stayLabel) {
         return new Promise(resolve => {
             confirmMsg.textContent = message;
@@ -2396,7 +2331,6 @@
         });
     }
 
-    /** Updates the identity line (Site ID - Contract Type) shown beside the modal title. */
     function updateHeaderIdentity() {
         const site = String(getVal(FIELD_KEYS.SITE_ID) || '').trim();
         const contract = String(state.headerContract || getVal(FIELD_KEYS.CONTRACT_TYPE) || '').trim();
@@ -2425,7 +2359,6 @@
         LL_NAME_ID
     ]);
 
-    // Re-checks the modal when Site ID / Contract fields change on the page.
     function onIdentityFieldChanged(event) {
         if (event.target && identityIds.has(event.target.id)) {
             if (!state.searching && event.target.id === SITE_ID_INPUT_ID) state.searchConfirmed = false;
@@ -2436,7 +2369,6 @@
     document.addEventListener('input', onIdentityFieldChanged, true);
     document.addEventListener('change', onIdentityFieldChanged, true);
 
-    // Re-checks the modal after every ASP.NET partial postback.
     function hookPageRefresh() {
         const prm = getPRM();
         if (prm && typeof prm.add_endRequest === 'function') {
@@ -2448,11 +2380,9 @@
     }
 
     // ============================================================
-    // 15. EVENT HANDLERS & INITIALIZATION
+    // 15. EVENT HANDLERS
     // ============================================================
-    fab.addEventListener('click', openModal);
-    // v6.3.1: Unified modal close confirmation across close button, cancel button, and Escape
-    closeMainBtn.addEventListener('click', () => { requestClose(true); });
+    closeMainBtn.addEventListener('click', () => { hidePanel(); });
     closeSettingsBtn.addEventListener('click', () => { leaveSettings(); });
     pasteButton.addEventListener('click', pasteFromClipboard);
     reviewButton.addEventListener('click', reviewPastedRow);
@@ -2465,41 +2395,112 @@
             showMainMessage('خطای پیش‌بینی‌نشده هنگام اعمال اطلاعات رخ داد. وضعیت فرم را بررسی کنید.', 'error');
         });
     });
+    gotoSaveButton.addEventListener('click', scrollToSaveButton);
     cancelButton.addEventListener('click', () => {
         if (state.searching || state.calculating) cancelActiveWait();
-        else requestClose(true);
+        else requestCancelAndClose();
     });
     onlyBox.addEventListener('change', updateGroups);
     gearBtn.addEventListener('click', openSettings);
     toast.addEventListener('click', () => toast.classList.remove('epf-toast-show'));
-    modal.addEventListener('click', event => event.stopPropagation());
+
+    modal.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && event.target && event.target.tagName === 'INPUT') {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    });
 
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape' || !state.isOpen || state.confirmOpen) return;
         if (state.settingsOpen) { leaveSettings(); return; }
-        requestClose(true);
     });
 
-    modal.addEventListener('keydown', event => {
-        if (event.key !== 'Tab') return;
-        const focusable = Array.from(modal.querySelectorAll('button, input, select, textarea'))
-            .filter(element => !element.disabled && element.offsetParent !== null);
-        if (!focusable.length) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-            event.preventDefault();
-            last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-            event.preventDefault();
-            first.focus();
+    // ============================================================
+    // 16. INJECTION & INITIALIZATION
+    // ============================================================
+
+    function injectHeaderButton() {
+        if (document.getElementById('epfMenuLink')) {
+            headerBtn = document.getElementById('epf-header-btn');
+            return true;
         }
-    });
+        const nav = document.getElementById('topmenuNav');
+        if (!nav) return false;
+
+        const reportLink = nav.querySelector('#reportLink');
+        const spacer = nav.querySelector('.topmenu-spacer');
+
+        const li = document.createElement('li');
+        li.id = 'epfMenuLink';
+
+        const btn = document.createElement('button');
+        btn.id = 'epf-header-btn';
+        btn.type = 'button';
+        btn.className = 'nav-link epf-nav-link';
+        btn.setAttribute('aria-controls', 'epf-modal');
+        btn.setAttribute('aria-expanded', 'false');
+        const icon = makeElement('i', 'fas fa-file-excel');
+        icon.setAttribute('aria-hidden', 'true');
+        const label = makeElement('span', 'link-text', 'انتقال از Excel');
+        btn.append(icon, label);
+        btn.addEventListener('click', togglePanel);
+
+        li.appendChild(btn);
+
+        if (spacer) {
+            nav.insertBefore(li, spacer);
+        } else if (reportLink) {
+            reportLink.insertAdjacentElement('afterend', li);
+        } else {
+            nav.appendChild(li);
+        }
+
+        headerBtn = btn;
+        return true;
+    }
+
+    function injectPanelRoot() {
+        if (root.parentNode) return true;
+        const card = document.querySelector('.main-card');
+        if (!card) return false;
+        const headerBar = card.querySelector('.card-header-custom');
+        const tabsWrapper = card.querySelector('.tabs-wrapper');
+
+        if (headerBar && tabsWrapper) {
+            card.insertBefore(root, tabsWrapper);
+            return true;
+        }
+        if (headerBar) {
+            headerBar.insertAdjacentElement('afterend', root);
+            return true;
+        }
+        return false;
+    }
+
+    function tryInit() {
+        let attempts = 0;
+        const maxAttempts = 100;
+        const attempt = () => {
+            const rootOk = injectPanelRoot();
+            const btnOk = injectHeaderButton();
+            if (rootOk && btnOk) {
+                if (!built) buildRows();
+                hookPageRefresh();
+                updateMapNote();
+                updateGearState();
+                updateChips(null);
+                return;
+            }
+            if (++attempts >= maxAttempts) {
+                console.warn('[EPF] Could not locate .main-card / .card-header-custom after 20s.');
+                return;
+            }
+            setTimeout(attempt, 200);
+        };
+        attempt();
+    }
 
     (document.head || document.documentElement).appendChild(styleElement);
-    document.body.appendChild(root);
-    hookPageRefresh();
-    updateMapNote();
-    updateGearState();
-    updateChips(null);
+    tryInit();
 })();
