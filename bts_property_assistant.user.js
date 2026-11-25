@@ -2,8 +2,8 @@
 // @name         BTS Property Excel Assistant Deep
 // @namespace    https://btsproperty.mtnirancell.ir/
 // @author       Ebrahim Shenavar | Irancell
-// @version      5.5.6
-// @description  Inline panel (max-width 1020px) under topmenu-nav; safe Excel review and form population (v5.5.6)
+// @version      6.5.6
+// @description  Inline panel (max-width 1020px) under topmenu-nav; safe Excel review and form population (v6.5.6)
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
 // @downloadURL  https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
 // @updateURL    https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
@@ -12,24 +12,19 @@
 // ==/UserScript==
 
 /*
- * Version 6.5.0 (پایه 6.3.3 — پنل inline در Site Management با دکمه‌ی هدر)
- * Version 6.5.1 (انتقال دکمه به #topmenuNav، اصلاح اسکرول بالای پنل، دکمه رفتن به ذخیره، فوتر تنظیمات)
- * Version 6.5.2 (محدودیت عرض پنل و چینش افقی دکمه‌های فوتر تنظیمات)
- * Version 6.5.3 (افزایش max-width پنل به 1020px)
- * Version 6.5.4 (اصلاح منطق بررسی وجود سایت با نبودن باکس ثبت سایت جدید)
- * Version 6.5.5 (مدیریت خطاهای فرمول اکسل + کنترل چک‌باکس فیلدها در تنظیمات)
+ * Version 6.5.4:
+ * - اصلاح منطق جستجوی Site ID: معیار تأیید وجود سایت، عدم نمایش باکس ثبت سایت جدید (Content_Site / Content_Txt_Site_ID_insert) به‌جای وابستگی به پر شدن LL Name قرار گرفت.
  *
- * Version 5.5.6 (ارتقای خوانایی فونت‌ها + نمایش مقدار فعلی وب در همه وضعیت‌ها + تفکیک خطای اکسل)
- * v5.5.6 changes:
- * - [نمایش مقدار فعلی در وب] در وضعیت‌های «خالی»، «خطای فرمول اکسل»، «نامعتبر» و «غیرقابل ویرایش» نیز
- *   مقدار فعلیِ ثبت‌شده در فرم وب زیر باکس نمایش داده می‌شود تا نیازی به چک کردن فرم اصلی نباشد.
- * - [تفکیک خطای فرمول اکسل] اگر سلول حاوی خطاهای اکسل (#N/A, #VALUE!, #REF!, ...) باشد، پیام زیر فیلد
- *   به‌وضوح اعلام می‌کند که «خطای فرمول اکسل نادیده گرفته شد؛ اعمال نمی‌شود».
- * - [بهبود اندازه فونت‌ها] سایز فونت برچسب‌ها، کنترل‌ها، وضعیت‌ها، عنوان بخش‌ها و راهنماها برای خوانایی بهتر
- *   و کاهش خستگی چشم ارتقا یافت.
- * - [پایداری و بازبینی هویت] هنگام باز شدن مجدد پنل، تطابق هویت با فرم جاری مجدداً سنجیده می‌شود و جلوگیری
- *   از Submit ناخواسته فرم با کلید Enter تقویت شد.
+ * Version 6.5.5:
+ * - تصفیه خطاهای فرمولی اکسل (#N/A، #VALUE!، #REF!، #DIV/0!، #NAME?، #NULL!، #NUM!، #GETTING_DATA) و برخورد مشابه خانه خالی تا دادهٔ صحیح وب بازنویسی نشود.
+ * - افزودن چک‌باکس انتخاب/غیرفعال‌سازی فیلدها در تنظیمات نگاشت هدر (به‌جز فیلدهای الزامی هویتی) و ذخیره وضعیت در localStorage.
+ *
+ * Version 6.5.6:
+ * - تفکیک پیام وضعیت بین «خالی عمدی» و «خطای فرمول اکسل» و نمایش مقدار «فعلی در وب» زیر باکس در حالت‌های خالی، خطای فرمول، نامعتبر و غیرقابل ویرایش.
+ * - افزایش یک‌پله‌ای اندازه فونت‌ها و بهبود سلسله‌مراتب خوانایی پنل بدون به‌هم‌ریختن چیدمان چندستونی در عرض 1020px.
+ * - بازبینی خودکار هویت هنگام باز شدن مجدد پنل و مسدودسازی کامل‌تر Enter برای جلوگیری از PostBack ناخواسته ASP.NET.
  */
+
 
 (function () {
     'use strict';
