@@ -2,8 +2,8 @@
 // @name         BTS Property Excel Assistant Deep
 // @namespace    https://btsproperty.mtnirancell.ir/
 // @author       Ebrahim Shenavar | Irancell
-// @version      6.5.5
-// @description  safe Excel review and form population (v6.5.5)
+// @version      5.5.6
+// @description  Inline panel (max-width 1020px) under topmenu-nav; safe Excel review and form population (v5.5.6)
 // @match        https://btsproperty.mtnirancell.ir/Site_Action.aspx*
 // @downloadURL  https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
 // @updateURL    https://github.com/Shenavar-Dev/Load-Excel-To-Web/raw/refs/heads/main/bts_property_assistant.user.js
@@ -12,13 +12,23 @@
 // ==/UserScript==
 
 /*
-  * Version 6.5.5 (مدیریت خطاهای فرمول اکسل + کنترل چک‌باکس فیلدها در تنظیمات)
- * v6.5.5 changes:
- * - [تصفیه خطاهای اکسل] مقادیر حاوی خطاهای رایج فرمول اکسل (#N/A, #VALUE!, #REF!, #DIV/0!, #NAME?, #NULL!, #NUM!, #GETTING_DATA)
- *   شناسایی شده و به عنوان سلول خالی در نظر گرفته می‌شوند تا داده‌های صحیح موجود در وب دست‌نخورده باقی بمانند.
- * - [چک‌باکس فعال/غیرفعال فیلدها] در تنظیمات نگاشت هدر، امکان فعال/غیرفعال کردن هر یک از 36 فیلد (به‌جز فیلدهای الزامی Site ID و Contract Type)
- *   فراهم شد. فیلدهای غیرفعال‌شده از بررسی هدر، نمایش در پنل اصلی، چیپ‌ها و فرایند اعمال کاملاً استثنا می‌شوند.
- * - [ذخیره‌سازی وضعیت فیلدها] وضعیت فعال/غیرفعال بودن فیلدها در localStorage ذخیره و بازیابی می‌شود.
+ * Version 6.5.0 (پایه 6.3.3 — پنل inline در Site Management با دکمه‌ی هدر)
+ * Version 6.5.1 (انتقال دکمه به #topmenuNav، اصلاح اسکرول بالای پنل، دکمه رفتن به ذخیره، فوتر تنظیمات)
+ * Version 6.5.2 (محدودیت عرض پنل و چینش افقی دکمه‌های فوتر تنظیمات)
+ * Version 6.5.3 (افزایش max-width پنل به 1020px)
+ * Version 6.5.4 (اصلاح منطق بررسی وجود سایت با نبودن باکس ثبت سایت جدید)
+ * Version 6.5.5 (مدیریت خطاهای فرمول اکسل + کنترل چک‌باکس فیلدها در تنظیمات)
+ *
+ * Version 5.5.6 (ارتقای خوانایی فونت‌ها + نمایش مقدار فعلی وب در همه وضعیت‌ها + تفکیک خطای اکسل)
+ * v5.5.6 changes:
+ * - [نمایش مقدار فعلی در وب] در وضعیت‌های «خالی»، «خطای فرمول اکسل»، «نامعتبر» و «غیرقابل ویرایش» نیز
+ *   مقدار فعلیِ ثبت‌شده در فرم وب زیر باکس نمایش داده می‌شود تا نیازی به چک کردن فرم اصلی نباشد.
+ * - [تفکیک خطای فرمول اکسل] اگر سلول حاوی خطاهای اکسل (#N/A, #VALUE!, #REF!, ...) باشد، پیام زیر فیلد
+ *   به‌وضوح اعلام می‌کند که «خطای فرمول اکسل نادیده گرفته شد؛ اعمال نمی‌شود».
+ * - [بهبود اندازه فونت‌ها] سایز فونت برچسب‌ها، کنترل‌ها، وضعیت‌ها، عنوان بخش‌ها و راهنماها برای خوانایی بهتر
+ *   و کاهش خستگی چشم ارتقا یافت.
+ * - [پایداری و بازبینی هویت] هنگام باز شدن مجدد پنل، تطابق هویت با فرم جاری مجدداً سنجیده می‌شود و جلوگیری
+ *   از Submit ناخواسته فرم با کلید Enter تقویت شد.
  */
 
 (function () {
@@ -82,13 +92,13 @@
     // Regex to match common Excel formula errors
     const EXCEL_ERROR_PATTERN = /^#(N\/A|VALUE!|REF!|DIV\/0!|NAME\?|NULL!|NUM!|GETTING_DATA)$/i;
 
-    function cleanExcelCell(val) {
-        if (val == null) return '';
+    function parseExcelCell(val) {
+        if (val == null) return { value: '', isError: false, rawError: '' };
         const str = String(val).trim();
         if (EXCEL_ERROR_PATTERN.test(str)) {
-            return ''; // Treat Excel error string as empty so it won't overwrite web data
+            return { value: '', isError: true, rawError: str };
         }
-        return str;
+        return { value: str, isError: false, rawError: '' };
     }
 
     function loadStoredDisabledFields() {
@@ -226,6 +236,7 @@
         }
 
         const webValues = {};
+        const excelErrors = Object.create(null);
         const outOfRange = Object.create(null);
         WEB_FIELDS.forEach(field => {
             if (!isFieldEnabled(field.key)) return;
@@ -235,10 +246,15 @@
                 outOfRange[field.key] = true;
                 return;
             }
-            const value = cleanExcelCell(cells[col]);
-            webValues[field.key] = field.type === 'textarea' ? value : value.replace(/\n/g, ' ');
+            const parsedCell = parseExcelCell(cells[col]);
+            if (parsedCell.isError) {
+                excelErrors[field.key] = parsedCell.rawError;
+                webValues[field.key] = '';
+                return;
+            }
+            webValues[field.key] = field.type === 'textarea' ? parsedCell.value : parsedCell.value.replace(/\n/g, ' ');
         });
-        return { ok: true, webValues, outOfRange };
+        return { ok: true, webValues, excelErrors, outOfRange };
     }
 
     function parseTSV(text) {
@@ -308,6 +324,7 @@
 
     const state = {
         webValues: {},
+        excelErrors: {},
         outOfRange: {},
         parsed: false,
         reviewedText: '',
@@ -450,7 +467,7 @@
 
     function getCurrentFormValue(field) {
         const info = targetInfo(field);
-        if (!info.exists || !info.typeMatches) return '';
+        if (!info.exists || !info.typeMatches) return null;
         if (field.type === 'select') {
             return selectedOptionText(info.element);
         }
@@ -570,7 +587,7 @@
     }
 
     // ============================================================
-    // 04. STYLES
+    // 04. STYLES (Upgraded Typography & Readability)
     // ============================================================
 
     const styleElement = makeElement('style');
@@ -578,7 +595,7 @@
     styleElement.textContent = `
         #epf-root, #epf-root * { box-sizing: border-box; }
         #epf-root {
-            --pri: #004E5B; --pri-d: #003D47; --acc: #F4C300; --ink: #243238; --mut: #5e6d73;
+            --pri: #004E5B; --pri-d: #003D47; --acc: #F4C300; --ink: #243238; --mut: #526167;
             --line: #dbe2e5; --ok: #218838; --warn: #9a7b0a; --bad: #c82333;
             --header-height: 64px; --topmenu-height: 56px;
             font-family: Irancell, Tahoma, sans-serif; direction: rtl;
@@ -593,15 +610,15 @@
             display: inline-flex; align-items: center; justify-content: center; gap: 6px;
             padding: 7px 14px; border: 1px solid #b8dce8; border-radius: 8px;
             background: #e6f3f8; color: var(--pri);
-            font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+            font-size: 13.5px; font-weight: 700; cursor: pointer; white-space: nowrap;
             transition: background .15s ease, box-shadow .15s ease;
             direction: rtl; text-decoration: none;
         }
         #epf-header-btn:hover { background: #d4ebf4; color: var(--pri); }
         #epf-header-btn:focus-visible { outline: 2px solid var(--pri); outline-offset: 2px; }
         #epf-header-btn[aria-expanded="true"] { background: #c6e8f4; font-weight: 700; }
-        #epf-header-btn .link-text { font-size: 13px; font-weight: 700; }
-        #epf-header-btn i { font-size: 13px; line-height: 1; }
+        #epf-header-btn .link-text { font-size: 13.5px; font-weight: 700; }
+        #epf-header-btn i { font-size: 14px; line-height: 1; }
 
         /* Inline panel (not floating) — max-width 1020px */
         #epf-overlay {
@@ -628,43 +645,43 @@
             border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0,0,0,.08);
             direction: rtl; overflow: hidden;
         }
-        .epf-header { position: relative; flex: 0 0 auto; padding: 10px 16px 9px; background: var(--pri); color: #fff; }
+        .epf-header { position: relative; flex: 0 0 auto; padding: 11px 16px 10px; background: var(--pri); color: #fff; }
         .epf-header-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
         .epf-title-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
-        .epf-title { margin: 0; font-size: 15.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .epf-identity { flex: 0 1 auto; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-            direction: ltr; font-size: 12px; font-weight: 700; color: #a5d6a7; background: rgba(255,255,255,.1); padding: 3px 10px; border-radius: 12px; }
-        .epf-xbtn { flex: 0 0 auto; width: 27px; height: 27px; display: inline-flex; align-items: center; justify-content: center;
-            border: 0; border-radius: 6px; background: rgba(255,255,255,.16); color: #fff; font-size: 14px; line-height: 1; cursor: pointer; }
+        .epf-title { margin: 0; font-size: 16.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .epf-identity { flex: 0 1 auto; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            direction: ltr; font-size: 13px; font-weight: 700; color: #a5d6a7; background: rgba(255,255,255,.12); padding: 3px 11px; border-radius: 12px; }
+        .epf-xbtn { flex: 0 0 auto; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+            border: 0; border-radius: 6px; background: rgba(255,255,255,.16); color: #fff; font-size: 15px; line-height: 1; cursor: pointer; }
         .epf-xbtn:hover { background: rgba(255,255,255,.3); }
-        .epf-subtitle { margin: 4px 0 6px; font-size: 11.5px; line-height: 1.6; color: rgba(255,255,255,.88); text-align: right; }
+        .epf-subtitle { margin: 5px 0 7px; font-size: 12px; line-height: 1.65; color: rgba(255,255,255,.92); text-align: right; }
         .epf-gear {
-            flex: 0 0 auto; display: inline-flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px 10px;
+            flex: 0 0 auto; display: inline-flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 11px;
             border: 1px solid #9bd5ff; border-radius: 7px; background: #cceaff; color: #14527f;
-            font-size: 11px; font-weight: 700; cursor: pointer;
+            font-size: 12px; font-weight: 700; cursor: pointer;
         }
         .epf-gear:hover:not(:disabled) { background: #b5ddfa; }
         .epf-gear:disabled { opacity: .45; cursor: not-allowed; }
-        .epf-gear-main { font-size: 11px; font-weight: 700; }
-        .epf-gear-state { font-size: 10px; font-weight: 400; line-height: 1.25; }
+        .epf-gear-main { font-size: 12px; font-weight: 700; }
+        .epf-gear-state { font-size: 11px; font-weight: 400; line-height: 1.25; }
         .epf-gear[data-mode="custom"] .epf-gear-state { color: #8a3b00; font-weight: 700; }
         .epf-gear[data-mode="none"] .epf-gear-state { color: #a33; }
-        .epf-paste-label { display: block; margin: 0 0 4px; font-size: 12px; font-weight: 700; text-align: right; }
-        .epf-paste-layout { display: grid; grid-template-columns: minmax(0, 1fr) 142px; gap: 8px; direction: ltr; align-items: stretch; }
+        .epf-paste-label { display: block; margin: 0 0 4px; font-size: 12.5px; font-weight: 700; text-align: right; }
+        .epf-paste-layout { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 8px; direction: ltr; align-items: stretch; }
         #epf-paste-area {
-            display: block; width: 100%; min-height: 48px; max-height: 76px; resize: vertical; padding: 6px 9px;
+            display: block; width: 100%; min-height: 50px; max-height: 80px; resize: vertical; padding: 7px 10px;
             border: 1px solid #cbd3d6; border-radius: 7px; background: #fbfcfc; color: var(--ink);
-            font-size: 12px; line-height: 1.5; direction: ltr; text-align: left; white-space: pre; overflow-wrap: normal;
+            font-size: 12.5px; line-height: 1.5; direction: ltr; text-align: left; white-space: pre; overflow-wrap: normal;
         }
         .epf-paste-actions { display: flex; flex-direction: row; gap: 6px; }
-        .epf-paste-actions .epf-btn { flex: 1; min-width: 0; min-height: 48px; padding: 5px 6px; }
+        .epf-paste-actions .epf-btn { flex: 1; min-width: 0; min-height: 50px; padding: 6px 7px; }
         #epf-map-note, #epf-paste-warning {
-            display: none; margin: 0 0 5px; padding: 4px 8px; border-radius: 6px; font-size: 11px; line-height: 1.55;
+            display: none; margin: 0 0 6px; padding: 5px 9px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
             white-space: pre-wrap;
         }
         #epf-map-note.epf-show { display: block; color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
-        #epf-paste-warning.epf-show { display: block; margin: 5px 0 0; color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
-        .epf-btn { border: 0; border-radius: 7px; cursor: pointer; padding: 8px 15px; font-size: 12px; font-weight: 700; }
+        #epf-paste-warning.epf-show { display: block; margin: 6px 0 0; color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
+        .epf-btn { border: 0; border-radius: 7px; cursor: pointer; padding: 8px 15px; font-size: 12.5px; font-weight: 700; }
         .epf-btn:disabled { opacity: .5; cursor: not-allowed; }
         .epf-btn-primary { color: var(--pri); background: var(--acc); }
         .epf-btn-apply { color: #fff; background: var(--ok); }
@@ -673,27 +690,27 @@
         .epf-btn-cancel:hover:not(:disabled) { background: #f1c2c7; }
         .epf-btn-goto-save { color: #fff; background: var(--pri); border: 1px solid var(--pri-d); }
         .epf-btn-goto-save:hover:not(:disabled) { background: var(--pri-d); }
-        .epf-btn-reset { width: auto; padding: 5px 12px; font-size: 11px; color: var(--pri); background: #e6f3f8; border: 1px solid #b8dce8; }
+        .epf-btn-reset { width: auto; padding: 6px 12px; font-size: 12px; color: var(--pri); background: #e6f3f8; border: 1px solid #b8dce8; }
         .epf-btn-reset:hover:not(:disabled) { background: #d4ebf4; }
-        .epf-content { flex: 1 1 auto; min-height: 0; padding: 10px 14px; overflow: visible; }
-        #epf-main-message { display: none; margin: 0 0 8px; padding: 6px 12px; border-radius: 7px; font-size: 11.5px; line-height: 1.65; white-space: pre-wrap; text-align: center; }
+        .epf-content { flex: 1 1 auto; min-height: 0; padding: 11px 15px; overflow: visible; }
+        #epf-main-message { display: none; margin: 0 0 9px; padding: 7px 12px; border-radius: 7px; font-size: 12px; line-height: 1.7; white-space: pre-wrap; text-align: center; }
         #epf-main-message.epf-show { display: block; }
         .epf-msg-error { color: #842029; background: #f8d7da; border: 1px solid #f5c6cb; }
         .epf-msg-success { color: #155724; background: #d4edda; }
         .epf-msg-info { color: #174b58; background: #e8f1f3; }
         .epf-msg-warning { color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
         #epf-fields { display: block; }
-        .epf-section { margin-top: 9px; padding: 0 9px 9px; overflow: hidden; border: 1px solid #cce3eb; border-radius: 8px; background: #fdfefe; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+        .epf-section { margin-top: 10px; padding: 0 10px 10px; overflow: hidden; border: 1px solid #cce3eb; border-radius: 8px; background: #fdfefe; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
         .epf-section:first-child { margin-top: 0; }
-        .epf-section-title { margin: 0 -9px 7px; padding: 4px 10px; text-align: center; font-size: 12px; font-weight: 700; color: var(--pri);
+        .epf-section-title { margin: 0 -10px 8px; padding: 5px 10px; text-align: center; font-size: 13px; font-weight: 700; color: var(--pri);
             background: #e6f3f8; border-bottom: 1px solid #c3dfe9; }
-        .epf-mrow { display: flex; direction: ltr; gap: 7px; }
-        .epf-mrow + .epf-mrow { margin-top: 6px; }
-        .epf-fcell { --w: 1 1 0; flex: var(--w); min-width: 0; display: flex; direction: ltr; gap: 6px; align-items: flex-start; padding: 5px 8px;
+        .epf-mrow { display: flex; direction: ltr; gap: 8px; }
+        .epf-mrow + .epf-mrow { margin-top: 7px; }
+        .epf-fcell { --w: 1 1 0; flex: var(--w); min-width: 0; display: flex; direction: ltr; gap: 7px; align-items: flex-start; padding: 6px 9px;
             border: 1px solid var(--line); border-radius: 7px; background: #fff; }
         .epf-mrow.epf-facing .epf-fcell { --w: 1 1 0; }
         .epf-fcell.epf-fwcell { --w: 1 1 100%; }
-        .epf-fcell[data-key="paymentComment"] { --w: 0 0 calc(50% - 3.5px); max-width: calc(50% - 3.5px); }
+        .epf-fcell[data-key="paymentComment"] { --w: 0 0 calc(50% - 4px); max-width: calc(50% - 4px); }
         .epf-fcell[data-key="nationalId"], .epf-fcell[data-key="llManner"] { --w: 0.8 1 0; }
         .epf-fcell[data-key="phoneNumber"] { --w: 1.4 1 0; }
         .epf-fcell[data-key="cancellationDate"] { --w: 0 0 285px; max-width: 36%; }
@@ -703,31 +720,31 @@
         .epf-fcell[data-st="not-editable"] { background: #fffbeb; border-color: #f0d78c; }
         .epf-fcell[data-st="invalid-select"] { background: #fff4f4; border-color: #efb7bd; }
         #epf-fields.epf-only-changes .epf-fcell:not([data-st="will-change"]):not([data-unmapped="1"]) { display: none; }
-        .epf-flabel { flex: 0 0 auto; max-width: 44%; min-width: 78px; padding-top: 5px; direction: ltr; text-align: left; color: #34464d;
-            font-size: 11.5px; font-weight: 700; overflow-wrap: anywhere; }
+        .epf-flabel { flex: 0 0 auto; max-width: 45%; min-width: 82px; padding-top: 5px; direction: ltr; text-align: left; color: #34464d;
+            font-size: 12.5px; font-weight: 700; overflow-wrap: anywhere; }
         .epf-flabel bdi::after { content: ":"; margin-inline-start: 1px; }
         .epf-fwrap { flex: 1 1 auto; width: 100%; min-width: 0; direction: rtl; }
         .epf-field-control {
-            display: block; width: 100%; min-height: 30px; padding: 4px 6px; border: 1px solid #cbd3d6;
-            border-radius: 6px; color: var(--ink); background: #fff; font-size: 11.5px; line-height: 1.5; text-align: start;
+            display: block; width: 100%; min-height: 32px; padding: 5px 7px; border: 1px solid #cbd3d6;
+            border-radius: 6px; color: var(--ink); background: #fff; font-size: 12.5px; line-height: 1.5; text-align: start;
         }
-        .epf-field-control:disabled { color: #8b979c; background: #f1f3f4; }
+        .epf-field-control:disabled { color: #7e8b90; background: #f1f3f4; }
         select.epf-field-control { direction: ltr; text-align: left; }
-        textarea.epf-field-control { min-height: 40px; resize: vertical; white-space: pre-wrap; }
-        .epf-meta { margin-top: 2px; font-size: 11px; line-height: 1.4; color: var(--mut); }
-        .epf-field-status { display: block; min-height: 14px; }
-        .epf-field-cur { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5a6a70; }
+        textarea.epf-field-control { min-height: 44px; resize: vertical; white-space: pre-wrap; }
+        .epf-meta { margin-top: 3px; font-size: 11.5px; line-height: 1.45; color: var(--mut); }
+        .epf-field-status { display: block; min-height: 15px; }
+        .epf-field-cur { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #4e5e64; font-size: 11.5px; margin-top: 1px; }
         [data-st="will-change"] .epf-field-status { color: var(--ok); font-weight: 700; }
         [data-st="not-editable"] .epf-field-status { color: var(--warn); }
         [data-st="invalid-select"] .epf-field-status { color: var(--bad); font-weight: 700; }
-        .epf-ct { margin-top: 4px; }
+        .epf-ct { margin-top: 5px; }
         .epf-ct-btn {
-            display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 1px solid var(--acc);
-            border-radius: 6px; color: var(--acc); background: var(--pri); font-size: 11px; font-weight: 700; cursor: pointer;
+            display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid var(--acc);
+            border-radius: 6px; color: var(--acc); background: var(--pri); font-size: 12px; font-weight: 700; cursor: pointer;
         }
         .epf-ct-btn:hover:not(:disabled) { background: var(--pri-d); }
         .epf-ct-btn:disabled { color: #8b979c; background: #d9dfe1; border-color: #c3cbce; cursor: not-allowed; }
-        .epf-ct-msg { margin-top: 3px; font-size: 10.5px; line-height: 1.5; }
+        .epf-ct-msg { margin-top: 4px; font-size: 11.5px; line-height: 1.5; }
         .epf-ct-info { color: #7a5b00; }
         .epf-ct-bad { color: var(--bad); }
         .epf-ct-ok { color: var(--ok); font-weight: 700; }
@@ -735,29 +752,29 @@
         /* Sticky footer keeps Apply/Cancel always reachable */
         .epf-footer {
             position: sticky; bottom: 0; z-index: 2;
-            display: flex; flex-direction: column; gap: 6px;
-            padding: 7px 12px 9px;
+            display: flex; flex-direction: column; gap: 7px;
+            padding: 8px 13px 10px;
             border-top: 1px solid #e8edef; background: #fbfcfc;
             box-shadow: 0 -2px 6px rgba(0,0,0,.04);
         }
         .epf-settings-footer { direction: rtl; display: flex; flex-direction: row; justify-content: center; align-items: center; gap: 14px; flex-wrap: wrap; }
-        .epf-settings-footer .epf-btn { min-width: 140px; min-height: 36px; padding: 6px 16px; }
-        .epf-settings-footer .epf-btn-reset { min-width: 120px; }
-        .epf-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-inline-end: 16px; }
-        .epf-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 20px; background: #edf0f1; color: #536168; font-size: 10.5px; white-space: nowrap; }
-        .epf-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #9aa5aa; }
+        .epf-settings-footer .epf-btn { min-width: 145px; min-height: 38px; padding: 7px 16px; }
+        .epf-settings-footer .epf-btn-reset { min-width: 125px; }
+        .epf-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-inline-end: 16px; }
+        .epf-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 20px; background: #edf0f1; color: #4b585f; font-size: 11.5px; white-space: nowrap; }
+        .epf-chip::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #9aa5aa; }
         .epf-chip[data-k="will-change"]::before { background: var(--ok); }
         .epf-chip[data-k="invalid-select"]::before { background: var(--bad); }
         .epf-chip[data-k="not-editable"]::before { background: #d2a500; }
-        .epf-chip-count { margin-inline-start: 2px; font-size: 13.5px; line-height: 1; font-weight: 800; color: inherit; }
-        .epf-only { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: var(--ink); white-space: nowrap; margin-inline-start: auto; cursor: pointer; }
+        .epf-chip-count { margin-inline-start: 2px; font-size: 14px; line-height: 1; font-weight: 800; color: inherit; }
+        .epf-only { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: var(--ink); white-space: nowrap; margin-inline-start: auto; cursor: pointer; }
         .epf-only input { width: 17px; height: 17px; accent-color: var(--pri); cursor: pointer; }
         .epf-footer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; width: 100%; }
 
         #epf-toast {
-            position: fixed; left: 24px; bottom: 20px; z-index: 10002; max-width: min(92vw, 540px); padding: 11px 15px;
-            border-radius: 99px; color: #fff; background: var(--pri); box-shadow: 0 6px 22px rgba(0,0,0,.2);
-            font-size: 12px; line-height: 1.75; direction: rtl; cursor: pointer; opacity: 0; transform: translateY(8px);
+            position: fixed; left: 24px; bottom: 20px; z-index: 10002; max-width: min(92vw, 560px); padding: 12px 16px;
+            border-radius: 10px; color: #fff; background: var(--pri); box-shadow: 0 6px 22px rgba(0,0,0,.22);
+            font-size: 12.5px; line-height: 1.8; direction: rtl; cursor: pointer; opacity: 0; transform: translateY(8px);
             pointer-events: none; transition: .2s ease;
         }
         #epf-toast.epf-toast-show { opacity: 1; transform: translateY(0); pointer-events: auto; }
@@ -765,14 +782,14 @@
 
         .epf-settings { flex: 1 1 auto; min-height: 0; overflow: visible; }
         .epf-settings-topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
-        .epf-settings-intro { margin: 0 0 8px; font-size: 13px; line-height: 1.85; color: #36464d; text-align: right; }
-        .epf-settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 8px; direction: ltr; align-items: stretch; }
+        .epf-settings-intro { margin: 0 0 9px; font-size: 13px; line-height: 1.85; color: #36464d; text-align: right; }
+        .epf-settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) 138px; gap: 8px; direction: ltr; align-items: stretch; }
         .epf-settings-actions { display: flex; flex-direction: column; gap: 6px; }
-        .epf-settings-actions .epf-btn { min-height: 34px; padding: 5px 7px; font-size: 11px; }
-        .epf-settings-area { display: block; width: 100%; min-height: 60px; max-height: 130px; resize: vertical; padding: 7px 9px;
-            border: 1px solid #cbd3d6; border-radius: 7px; background: #fbfcfc; color: var(--ink); font-size: 11.5px;
+        .epf-settings-actions .epf-btn { min-height: 36px; padding: 6px 8px; font-size: 12px; }
+        .epf-settings-area { display: block; width: 100%; min-height: 62px; max-height: 135px; resize: vertical; padding: 7px 10px;
+            border: 1px solid #cbd3d6; border-radius: 7px; background: #fbfcfc; color: var(--ink); font-size: 12.5px;
             line-height: 1.55; direction: ltr; text-align: left; white-space: pre; }
-        .epf-hlegend { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 18px; margin: 9px 0 0; font-size: 11.5px; line-height: 1.65; color: var(--mut); }
+        .epf-hlegend { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; margin: 10px 0 0; font-size: 12px; line-height: 1.65; color: var(--mut); }
         .epf-hlegend span { font-weight: 700; }
         .epf-hlegend .lg-miss { color: var(--bad); }
         .epf-hlegend .lg-dup { color: #c2570c; }
@@ -780,22 +797,22 @@
         .epf-hlegend .lg-chg { color: var(--ok); }
         .epf-hlegend .lg-def { color: #8a959b; }
         .epf-hlegend .lg-dis { color: #8b979c; text-decoration: line-through; }
-        .epf-hgrid-wrap { margin-top: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfc; }
-        .epf-hgrid-site-row { display: flex; justify-content: center; margin-bottom: 8px; }
-        .epf-hgrid-site-row .epf-hcell { width: min(260px, 100%); border-color: #b8dce8; background: #f2f9fc; }
+        .epf-hgrid-wrap { margin-top: 9px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfc; }
+        .epf-hgrid-site-row { display: flex; justify-content: center; margin-bottom: 9px; }
+        .epf-hgrid-site-row .epf-hcell { width: min(270px, 100%); border-color: #b8dce8; background: #f2f9fc; }
         .epf-hgrid { direction: ltr; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
-        .epf-hcell { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; padding: 6px 8px;
+        .epf-hcell { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; padding: 7px 9px;
             border: 1px solid #e2e8ea; border-radius: 6px; background: #fff; font-size: 12.5px; }
         .epf-hchk { width: 15px; height: 15px; accent-color: var(--pri); cursor: pointer; flex: 0 0 auto; margin: 0; }
         .epf-hcell-left { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; }
         .epf-hname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 600; }
         .epf-hname.epf-h-disabled { opacity: 0.55; text-decoration: line-through; color: #7f8c8d; }
-        .epf-hcol { flex: 0 0 auto; min-width: 18px; text-align: center; font-weight: 800; font-size: 12.5px; color: #98a3a8; }
+        .epf-hcol { flex: 0 0 auto; min-width: 18px; text-align: center; font-weight: 800; font-size: 13px; color: #98a3a8; }
         .epf-hname.epf-h-missing, .epf-hcol.epf-h-missing { color: var(--bad); }
         .epf-hname.epf-h-dup, .epf-hcol.epf-h-dup { color: #c2570c; }
         .epf-hname.epf-h-absent, .epf-hcol.epf-h-absent { color: #9a7b0a; }
         .epf-hcol.epf-h-changed { color: var(--ok); }
-        .epf-box { display: none; margin-top: 8px; padding: 7px 9px; border-radius: 7px; font-size: 11px; line-height: 1.75; white-space: pre-wrap; }
+        .epf-box { display: none; margin-top: 9px; padding: 8px 10px; border-radius: 7px; font-size: 12px; line-height: 1.75; white-space: pre-wrap; }
         .epf-box.epf-show { display: block; }
         .epf-box-err { color: #842029; background: #f8d7da; }
         .epf-box-warn { color: #7a5b00; background: #fff8e6; border: 1px solid #f0d78c; }
@@ -805,31 +822,31 @@
         #epf-confirm-overlay { position: fixed; inset: 0; z-index: 10005; display: none; align-items: center; justify-content: center;
             padding: 16px; background: rgba(30,25,21,.45); }
         #epf-confirm-overlay.epf-open { display: flex; }
-        .epf-confirm-box { width: min(92vw, 420px); padding: 16px 18px; background: #fff; color: var(--ink); border-radius: 10px;
+        .epf-confirm-box { width: min(92vw, 430px); padding: 18px 20px; background: #fff; color: var(--ink); border-radius: 10px;
             box-shadow: 0 14px 44px rgba(0,0,0,.3); }
-        .epf-confirm-msg { margin: 0 0 14px; font-size: 12px; line-height: 1.85; }
+        .epf-confirm-msg { margin: 0 0 15px; font-size: 13px; line-height: 1.85; }
         .epf-confirm-actions { display: flex; justify-content: center; gap: 10px; }
-        .epf-confirm-actions .epf-btn { min-width: 130px; }
+        .epf-confirm-actions .epf-btn { min-width: 135px; }
 
         @media (max-width: 768px) {
-            #epf-header-btn { padding: 6px 10px; font-size: 12px; gap: 4px; }
+            #epf-header-btn { padding: 6px 10px; font-size: 12.5px; gap: 4px; }
             .epf-content { padding: 8px; }
             .epf-mrow { flex-wrap: wrap; }
             .epf-fcell { --w: 1 1 100% !important; flex: 1 1 100% !important; max-width: 100% !important; }
             .epf-flabel { max-width: 100%; flex: 0 0 auto; }
             .epf-settings-footer { flex-wrap: wrap; }
-            .epf-footer { padding: 6px 8px; }
+            .epf-footer { padding: 7px 8px; }
             .epf-hgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .epf-settings-layout { grid-template-columns: minmax(0, 1fr) 112px; }
-            .epf-identity { max-width: 180px; font-size: 11px; }
+            .epf-settings-layout { grid-template-columns: minmax(0, 1fr) 115px; }
+            .epf-identity { max-width: 180px; font-size: 11.5px; }
         }
         @media (max-width: 420px) {
-            .epf-title { font-size: 13.5px; }
-            .epf-subtitle { font-size: 10px; }
-            .epf-paste-layout { grid-template-columns: minmax(0, 1fr) 110px; }
-            #epf-paste-area { min-height: 44px; }
-            .epf-chip { font-size: 9.5px; padding: 2px 5px; }
-            .epf-chip-count { font-size: 12.5px; }
+            .epf-title { font-size: 14px; }
+            .epf-subtitle { font-size: 11px; }
+            .epf-paste-layout { grid-template-columns: minmax(0, 1fr) 112px; }
+            #epf-paste-area { min-height: 46px; }
+            .epf-chip { font-size: 10.5px; padding: 2px 6px; }
+            .epf-chip-count { font-size: 13px; }
         }
         @media (prefers-reduced-motion: reduce) {
             #epf-overlay { transition: none; }
@@ -878,7 +895,7 @@
 
     const headerMain = makeElement('div');
     const subtitle = makeElement('p', 'epf-subtitle',
-        'ردیف داده را از اکسل در کادر زیر پیست کنید و «بررسی» را بزنید. فیلدهای بدون هدر یا بدون داده بررسی نمی‌شوند و خانهٔ خالی یا حاوی خطای اکسل اعمال نمی‌شود. اگر فیلدی مؤثر در محاسبه تغییر کند، Calculate خودکار اجرا می‌شود.');
+        'ردیف داده را از اکسل در کادر زیر پیست کنید و «بررسی» را بزنید. فیلدهای بدون هدر یا بدون داده بررسی نمی‌شوند و خانهٔ خالی یا حاوی خطای فرمول اکسل اعمال نمی‌شود. اگر فیلدی مؤثر در محاسبه تغییر کند، Calculate خودکار اجرا می‌شود.');
     const mapNote = makeElement('div');
     mapNote.id = 'epf-map-note';
     mapNote.setAttribute('role', 'status');
@@ -920,7 +937,7 @@
     const chipsBox = makeElement('div', 'epf-chips');
     const CHIP_DEFS = [
         { key: 'will-change', label: 'تغییر', hint: 'فیلدهایی که مقدارشان روی فرم تغییر می‌کند' },
-        { key: 'same', label: 'یکسان', hint: 'مقدار ردیف با فرم برابر است یا خانهٔ ردیف خالی است' },
+        { key: 'same', label: 'یکسان / خالی', hint: 'مقدار ردیف با فرم برابر است یا خانهٔ ردیف خالی / خطای اکسل است' },
         { key: 'invalid-select', label: 'نامعتبر', hint: 'مقدار ردیف در گزینه‌های لیست سایت نیست و اعمال نمی‌شود' },
         { key: 'not-editable', label: 'غیرقابل بررسی', hint: 'بدون هدر، بدون داده در ردیف یا غیرقابل ویرایش در فرم؛ بررسی نمی‌شود' }
     ];
@@ -1052,6 +1069,9 @@
                     controls[key] = control;
                     rows[key] = { row: cell, status, cur: current, curVal: currentValue };
                     control.addEventListener(field.type === 'select' ? 'change' : 'input', () => {
+                        if (state.excelErrors && state.excelErrors[key]) {
+                            delete state.excelErrors[key];
+                        }
                         state.webValues[key] = control.value;
                         refreshAll();
                     });
@@ -1184,6 +1204,8 @@
             if (rows[key]) rows[key].row.hidden = true;
             return 'disabled';
         }
+        if (rows[key]) rows[key].row.hidden = false;
+
         if (!isMapped(key)) {
             setRowStatus(key, 'not-editable', 'هدر ندارد؛ بررسی نمی‌شود', null, 'no-header');
             return 'not-editable';
@@ -1193,9 +1215,15 @@
             return 'not-editable';
         }
 
+        const current = getCurrentFormValue(field);
         const pasted = getVal(key);
+        const rawExcelError = state.excelErrors ? state.excelErrors[key] : null;
+
         if (String(pasted) === '') {
-            setRowStatus(key, 'same', 'داده خالی است؛ اعمال نمی‌شود');
+            const emptyMsg = rawExcelError
+                ? `خطای اکسل (${rawExcelError}) نادیده گرفته شد؛ اعمال نمی‌شود`
+                : 'داده خالی است؛ اعمال نمی‌شود';
+            setRowStatus(key, 'same', emptyMsg, current);
             return 'same';
         }
 
@@ -1203,7 +1231,7 @@
 
         if (key === 'cancellationDate') {
             if (!isCancellationDateEnabled()) {
-                setRowStatus(key, 'not-editable', 'فقط وقتی Cancellation Letter برابر Yes باشد قابل اعمال است');
+                setRowStatus(key, 'not-editable', 'فقط وقتی Cancellation Letter برابر Yes باشد قابل اعمال است', current);
                 return 'not-editable';
             }
         } else {
@@ -1214,10 +1242,10 @@
             if (!info.editable) {
                 const typeRow = rows[FIELD_KEYS.ESCALATION_TYPE];
                 if (key === 'escalation' && typeRow && typeRow.row.dataset.st === 'will-change') {
-                    setRowStatus(key, 'not-editable', 'پس از اعمال Escalation Type باز می‌شود و همان‌جا اعمال خواهد شد', null, 'deferred');
+                    setRowStatus(key, 'not-editable', 'پس از اعمال Escalation Type باز می‌شود و همان‌جا اعمال خواهد شد', current, 'deferred');
                     return 'not-editable';
                 }
-                setRowStatus(key, 'not-editable', 'این فیلد در فرم قابل ویرایش نیست؛ اعمال نمی‌شود');
+                setRowStatus(key, 'not-editable', 'این فیلد در فرم قابل ویرایش نیست؛ اعمال نمی‌شود', current);
                 return 'not-editable';
             }
         }
@@ -1226,16 +1254,15 @@
         if (field.type === 'select') {
             option = findSelectableOption(info.element, pasted);
             if (!option) {
-                setRowStatus(key, 'invalid-select', 'مقدار در گزینه‌های سایت وجود ندارد؛ اعمال نمی‌شود');
+                setRowStatus(key, 'invalid-select', 'مقدار در گزینه‌های سایت وجود ندارد؛ اعمال نمی‌شود', current);
                 return 'invalid-select';
             }
         }
 
-        const current = getCurrentFormValue(field);
         let same;
         if (field.type === 'select') same = String(info.element.value) === String(option.value);
-        else if (key === FIELD_KEYS.AMOUNT) same = stripCommas(pasted) === stripCommas(current);
-        else same = looseText(pasted) === looseText(current);
+        else if (key === FIELD_KEYS.AMOUNT) same = stripCommas(pasted) === stripCommas(current || '');
+        else same = looseText(pasted) === looseText(current || '');
 
         if (same) {
             setRowStatus(key, 'same', 'مقدار ردیف با فرم یکسان است؛ تغییری لازم نیست');
@@ -1419,6 +1446,7 @@
 
     function resetParsedData() {
         state.webValues = {};
+        state.excelErrors = {};
         state.outOfRange = {};
         state.parsed = false;
         state.reviewedText = '';
@@ -1454,7 +1482,14 @@
         const lengths = allRows.map(row => row.length);
         const colWarning = allRows.length > 1 && lengths.some(n => n !== lengths[0])
             ? 'توجه: ردیف‌های پیست‌شده تعداد ستون یکسان ندارند؛ جای ستون‌ها را بررسی کنید.' : '';
-        return { ok: true, webValues: extraction.webValues, outOfRange: extraction.outOfRange, rowWarning, colWarning };
+        return {
+            ok: true,
+            webValues: extraction.webValues,
+            excelErrors: extraction.excelErrors,
+            outOfRange: extraction.outOfRange,
+            rowWarning,
+            colWarning
+        };
     }
 
     async function pasteFromClipboard() {
@@ -1497,6 +1532,7 @@
         if (result.colWarning) showToast(result.colWarning, 5000);
 
         state.webValues = result.webValues;
+        state.excelErrors = result.excelErrors || {};
         state.outOfRange = result.outOfRange || {};
         state.parsed = true;
         state.reviewedText = rawText;
@@ -2234,6 +2270,7 @@
             const leave = await askConfirm('تغییرات ذخیره‌نشده حذف می‌شود. به پنل اصلی برگردیم؟', 'برگشت بدون ذخیره', 'ماندن در تنظیمات');
             if (!leave) return;
         }
+        activeDisabledFields = loadStoredDisabledFields();
         hideSettings();
         refreshAll();
         gearBtn.focus();
@@ -2287,7 +2324,14 @@
         if (headerBtn) headerBtn.setAttribute('aria-expanded', 'true');
 
         if (state.parsed) {
+            const siteInfo = targetInfo(FIELD_BY_KEY[FIELD_KEYS.SITE_ID]);
+            const pastedSite = normalize(getVal(FIELD_KEYS.SITE_ID));
+            const currentSite = siteInfo.exists ? normalize(siteInfo.element.value) : '';
+            if (pastedSite !== currentSite) {
+                state.searchConfirmed = false;
+            }
             syncAllSelects();
+            updateHeaderIdentity();
             refreshAll();
             renderContractFix();
         }
@@ -2513,7 +2557,7 @@
     toast.addEventListener('click', () => toast.classList.remove('epf-toast-show'));
 
     modal.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' && event.target && event.target.tagName === 'INPUT') {
+        if (event.key === 'Enter' && event.target && (event.target.tagName === 'INPUT' || event.target.tagName === 'SELECT')) {
             event.preventDefault();
             event.stopPropagation();
         }
